@@ -4,7 +4,7 @@ import path from 'path';
 export interface ExecutionLog {
   id: string;
   timestamp: string;
-  action: 'checkin' | 'checkout';
+  action: 'checkin' | 'checkout' | 'test_odoo' | 'test_email' | 'config_change';
   status: 'success' | 'failed' | 'skipped';
   message: string;
   screenshotPath?: string;

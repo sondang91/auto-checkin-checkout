@@ -51,6 +51,8 @@ export default function Dashboard() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [now, setNow] = useState(new Date());
+  const [editing, setEditing] = useState<'checkin' | 'checkout' | null>(null);
+  const [editValue, setEditValue] = useState('');
 
   const fetchData = useCallback(async () => {
     try {
@@ -102,6 +104,48 @@ export default function Dashboard() {
     }
   };
 
+  const saveTime = async (field: 'checkinTime' | 'checkoutTime', value: string) => {
+    if (!/^\d{2}:\d{2}$/.test(value)) {
+      setTestResult({ success: false, message: 'Giờ phải đúng format HH:mm' });
+      return;
+    }
+    try {
+      const res = await fetch('/api/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [field]: value }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setTestResult({ success: true, message: `✅ Đã cập nhật ${field === 'checkinTime' ? 'giờ Check-in' : 'giờ Check-out'} thành ${value}` });
+        fetchData();
+      } else {
+        setTestResult({ success: false, message: data.error || 'Lỗi cập nhật' });
+      }
+    } catch {
+      setTestResult({ success: false, message: 'Lỗi kết nối server' });
+    }
+    setEditing(null);
+  };
+
+  const toggleEmail = async () => {
+    const newValue = !emailConfig?.enabled;
+    try {
+      const res = await fetch('/api/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ emailEnabled: newValue }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setTestResult({ success: true, message: `✉️ Email đã ${newValue ? 'Bật' : 'Tắt'}` });
+        fetchData();
+      }
+    } catch {
+      setTestResult({ success: false, message: 'Lỗi cập nhật' });
+    }
+  };
+
   const testConnection = async (type: 'odoo' | 'email') => {
     setActionLoading(`test-${type}`);
     setTestResult(null);
@@ -113,6 +157,7 @@ export default function Dashboard() {
       });
       const data = await res.json();
       setTestResult({ success: data.success, message: data.message });
+      fetchData();
     } catch {
       setTestResult({ success: false, message: 'Lỗi kết nối' });
     } finally {
@@ -208,13 +253,49 @@ export default function Dashboard() {
         <div className="card animate-fade-in">
           <div style={{ fontSize: 12, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 12 }}>Lịch trình</div>
           <div style={{ display: 'flex', gap: 16, marginBottom: 12 }}>
-            <div style={{ flex: 1, padding: '12px', background: 'var(--accent-emerald-glow)', borderRadius: 10, textAlign: 'center' }}>
+            {/* CHECK-IN time */}
+            <div style={{ flex: 1, padding: '12px', background: 'var(--accent-emerald-glow)', borderRadius: 10, textAlign: 'center', position: 'relative' }}>
               <div style={{ fontSize: 11, color: 'var(--accent-emerald)', marginBottom: 4 }}>CHECK-IN</div>
-              <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--accent-emerald)', fontFamily: 'var(--font-mono)' }}>{config?.checkinTime || '--:--'}</div>
+              {editing === 'checkin' ? (
+                <div style={{ display: 'flex', gap: 4, justifyContent: 'center', alignItems: 'center' }}>
+                  <input
+                    type="time"
+                    value={editValue}
+                    onChange={(e) => setEditValue(e.target.value)}
+                    style={{ fontSize: 18, fontWeight: 700, fontFamily: 'var(--font-mono)', background: 'var(--bg-primary)', color: 'var(--accent-emerald)', border: '1px solid var(--accent-emerald)', borderRadius: 6, padding: '4px 8px', width: 100, textAlign: 'center' }}
+                    autoFocus
+                  />
+                  <button onClick={() => saveTime('checkinTime', editValue)} style={{ background: 'var(--accent-emerald)', color: '#fff', border: 'none', borderRadius: 6, padding: '4px 8px', cursor: 'pointer', fontSize: 14 }}>✓</button>
+                  <button onClick={() => setEditing(null)} style={{ background: 'transparent', color: 'var(--text-muted)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 8px', cursor: 'pointer', fontSize: 14 }}>✕</button>
+                </div>
+              ) : (
+                <>
+                  <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--accent-emerald)', fontFamily: 'var(--font-mono)' }}>{config?.checkinTime || '--:--'}</div>
+                  <button onClick={() => { setEditing('checkin'); setEditValue(config?.checkinTime || '08:30'); }} style={{ position: 'absolute', top: 6, left: 6, background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, opacity: 0.5, padding: 2 }} title="Chỉnh giờ Check-in">✏️</button>
+                </>
+              )}
             </div>
-            <div style={{ flex: 1, padding: '12px', background: 'var(--accent-blue-glow)', borderRadius: 10, textAlign: 'center' }}>
+            {/* CHECK-OUT time */}
+            <div style={{ flex: 1, padding: '12px', background: 'var(--accent-blue-glow)', borderRadius: 10, textAlign: 'center', position: 'relative' }}>
               <div style={{ fontSize: 11, color: 'var(--accent-blue)', marginBottom: 4 }}>CHECK-OUT</div>
-              <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--accent-blue)', fontFamily: 'var(--font-mono)' }}>{config?.checkoutTime || '--:--'}</div>
+              {editing === 'checkout' ? (
+                <div style={{ display: 'flex', gap: 4, justifyContent: 'center', alignItems: 'center' }}>
+                  <input
+                    type="time"
+                    value={editValue}
+                    onChange={(e) => setEditValue(e.target.value)}
+                    style={{ fontSize: 18, fontWeight: 700, fontFamily: 'var(--font-mono)', background: 'var(--bg-primary)', color: 'var(--accent-blue)', border: '1px solid var(--accent-blue)', borderRadius: 6, padding: '4px 8px', width: 100, textAlign: 'center' }}
+                    autoFocus
+                  />
+                  <button onClick={() => saveTime('checkoutTime', editValue)} style={{ background: 'var(--accent-blue)', color: '#fff', border: 'none', borderRadius: 6, padding: '4px 8px', cursor: 'pointer', fontSize: 14 }}>✓</button>
+                  <button onClick={() => setEditing(null)} style={{ background: 'transparent', color: 'var(--text-muted)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 8px', cursor: 'pointer', fontSize: 14 }}>✕</button>
+                </div>
+              ) : (
+                <>
+                  <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--accent-blue)', fontFamily: 'var(--font-mono)' }}>{config?.checkoutTime || '--:--'}</div>
+                  <button onClick={() => { setEditing('checkout'); setEditValue(config?.checkoutTime || '17:30'); }} style={{ position: 'absolute', top: 6, left: 6, background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, opacity: 0.5, padding: 2 }} title="Chỉnh giờ Check-out">✏️</button>
+                </>
+              )}
             </div>
           </div>
           <div style={{ display: 'flex', gap: 4 }}>
@@ -329,11 +410,23 @@ export default function Dashboard() {
               <span style={{ color: 'var(--text-primary)' }}>{config?.odooPassword || 'Chưa cấu hình'}</span>
             </div>
             <hr style={{ border: 'none', borderTop: '1px solid var(--border-color)', margin: '4px 0' }} />
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ color: 'var(--text-muted)' }}>Email</span>
-              <span className={`badge ${emailConfig?.enabled ? 'success' : 'error'}`}>
-                {emailConfig?.enabled ? 'Bật' : 'Tắt'}
-              </span>
+              <button
+                onClick={toggleEmail}
+                style={{
+                  position: 'relative', width: 44, height: 24, borderRadius: 12, border: 'none', cursor: 'pointer',
+                  background: emailConfig?.enabled ? 'var(--accent-emerald)' : 'var(--border-color)',
+                  transition: 'background 0.2s',
+                }}
+                title={emailConfig?.enabled ? 'Nhấn để tắt' : 'Nhấn để bật'}
+              >
+                <span style={{
+                  position: 'absolute', top: 2, left: emailConfig?.enabled ? 22 : 2,
+                  width: 20, height: 20, borderRadius: '50%', background: '#fff',
+                  transition: 'left 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+                }} />
+              </button>
             </div>
             {emailConfig?.enabled && (
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -343,7 +436,7 @@ export default function Dashboard() {
             )}
           </div>
           <p style={{ margin: '12px 0 0', fontSize: 11, color: 'var(--text-muted)' }}>
-            💡 Cấu hình qua Environment Variables (.env hoặc Vercel Dashboard)
+            💡 Bật email để nhận thông báo: Check-in/Check-out, thay đổi cấu hình, kết quả test
           </p>
         </div>
       </div>
@@ -388,8 +481,8 @@ export default function Dashboard() {
                       {formatTime(log.timestamp)}
                     </td>
                     <td style={{ padding: '10px 12px' }}>
-                      <span className={`badge ${log.action === 'checkin' ? 'success' : 'info'}`}>
-                        {log.action === 'checkin' ? '🟢 Check-in' : '🔵 Check-out'}
+                      <span className={`badge ${log.action === 'checkin' ? 'success' : log.action === 'checkout' ? 'info' : 'info'}`}>
+                        {log.action === 'checkin' ? '🟢 Check-in' : log.action === 'checkout' ? '🔵 Check-out' : log.action === 'test_odoo' ? '🔗 Test Odoo' : log.action === 'test_email' ? '📧 Test Email' : '⚙️ Config'}
                       </span>
                     </td>
                     <td style={{ padding: '10px 12px' }}>

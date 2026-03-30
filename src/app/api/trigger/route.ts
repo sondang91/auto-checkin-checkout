@@ -17,8 +17,11 @@ export async function POST(request: NextRequest) {
     const cronSecret = process.env.CRON_SECRET;
     const authHeader = request.headers.get('authorization');
     const isVercelCron = request.headers.get('x-vercel-cron') === '1';
+    const referer = request.headers.get('referer') || '';
+    const host = request.headers.get('host') || '';
+    const isSameOrigin = referer.includes(host);
 
-    if (!isVercelCron && cronSecret) {
+    if (!isVercelCron && !isSameOrigin && cronSecret) {
       const providedSecret = secret || authHeader?.replace('Bearer ', '');
       if (providedSecret !== cronSecret) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });

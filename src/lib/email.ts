@@ -2,6 +2,8 @@
  * Email notification service using Nodemailer SMTP.
  */
 import nodemailer from 'nodemailer';
+import fs from 'fs';
+import path from 'path';
 
 export interface EmailConfig {
   enabled: boolean;
@@ -14,9 +16,24 @@ export interface EmailConfig {
   emailFrom: string;
 }
 
+function getEmailOverride(): { emailEnabled?: boolean } {
+  try {
+    const filePath = path.join(process.cwd(), 'data', 'config-override.json');
+    if (fs.existsSync(filePath)) {
+      return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    }
+  } catch { /* ignore */ }
+  return {};
+}
+
 export function getEmailConfig(): EmailConfig {
+  const overrides = getEmailOverride();
+  const enabled = overrides.emailEnabled !== undefined
+    ? overrides.emailEnabled
+    : process.env.EMAIL_ENABLED === 'true';
+
   return {
-    enabled: process.env.EMAIL_ENABLED === 'true',
+    enabled,
     smtpHost: process.env.SMTP_HOST || 'smtp.gmail.com',
     smtpPort: Number(process.env.SMTP_PORT) || 587,
     smtpSecure: process.env.SMTP_SECURE === 'true',
@@ -28,7 +45,7 @@ export function getEmailConfig(): EmailConfig {
 }
 
 export async function sendNotification(
-  action: 'checkin' | 'checkout',
+  action: 'checkin' | 'checkout' | 'config_change',
   status: 'success' | 'failed',
   message: string,
   details?: Record<string, string>
@@ -55,8 +72,13 @@ export async function sendNotification(
     });
 
     const isSuccess = status === 'success';
-    const actionLabel = action === 'checkin' ? 'Check-in' : 'Check-out';
-    const statusEmoji = isSuccess ? '✅' : '❌';
+    const actionLabels: Record<string, string> = {
+      checkin: 'Check-in',
+      checkout: 'Check-out',
+      config_change: 'Thay đổi cấu hình',
+    };
+    const actionLabel = actionLabels[action] || action;
+    const statusEmoji = action === 'config_change' ? '⚙️' : (isSuccess ? '✅' : '❌');
     const statusLabel = isSuccess ? 'Thành công' : 'Thất bại';
     const now = new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
 
