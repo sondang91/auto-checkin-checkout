@@ -132,7 +132,7 @@ export class OdooClient {
   async getEmployeeId(): Promise<number> {
     if (!this.uid) throw new Error('Not authenticated');
 
-    const result = await this.rpc('/web/dataset/call_kw', {
+    const result = await this.rpc('/web/dataset/call_kw/hr.employee/search_read', {
       model: 'hr.employee',
       method: 'search_read',
       args: [[['user_id', '=', this.uid]]],
@@ -155,7 +155,7 @@ export class OdooClient {
   async getAttendanceState(): Promise<{ state: 'checked_in' | 'checked_out'; employeeName: string }> {
     if (!this.uid) throw new Error('Not authenticated');
 
-    const result = await this.rpc('/web/dataset/call_kw', {
+    const result = await this.rpc('/web/dataset/call_kw/hr.employee/search_read', {
       model: 'hr.employee',
       method: 'search_read',
       args: [[['user_id', '=', this.uid]]],
@@ -185,7 +185,7 @@ export class OdooClient {
     const beforeState = await this.getAttendanceState();
 
     try {
-      await this.rpc('/web/dataset/call_kw', {
+      await this.rpc('/web/dataset/call_kw/hr.employee/attendance_manual', {
         model: 'hr.employee',
         method: 'attendance_manual',
         args: [[employeeId], 'hr_attendance.hr_attendance_action_my_attendances'],
