@@ -2,8 +2,7 @@
  * Email notification service using Nodemailer SMTP.
  */
 import nodemailer from 'nodemailer';
-import fs from 'fs';
-import path from 'path';
+import { getOverrides } from './config';
 
 export interface EmailConfig {
   enabled: boolean;
@@ -16,18 +15,8 @@ export interface EmailConfig {
   emailFrom: string;
 }
 
-function getEmailOverride(): { emailEnabled?: boolean } {
-  try {
-    const filePath = path.join(process.cwd(), 'data', 'config-override.json');
-    if (fs.existsSync(filePath)) {
-      return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-    }
-  } catch { /* ignore */ }
-  return {};
-}
-
 export function getEmailConfig(): EmailConfig {
-  const overrides = getEmailOverride();
+  const overrides = getOverrides();
   const enabled = overrides.emailEnabled !== undefined
     ? overrides.emailEnabled
     : process.env.EMAIL_ENABLED === 'true';

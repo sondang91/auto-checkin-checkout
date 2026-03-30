@@ -4,9 +4,7 @@
  * Works on serverless (Vercel) — no browser needed.
  */
 
-// Bypass SSL certificate verification for Odoo servers with self-signed certs
-// This is safe because we only call our own known Odoo instance
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+import https from 'https';
 
 export interface OdooSession {
   sessionId: string;
@@ -27,10 +25,15 @@ export class OdooClient {
   private baseUrl: string;
   private sessionId: string | null = null;
   private uid: number | null = null;
+  private httpsAgent: https.Agent;
 
   constructor(baseUrl: string) {
     // Remove trailing slash
     this.baseUrl = baseUrl.replace(/\/$/, '');
+    // Create HTTPS agent that bypasses SSL verification only for Odoo calls
+    this.httpsAgent = new https.Agent({
+      rejectUnauthorized: false,
+    });
   }
 
   /**
@@ -55,6 +58,8 @@ export class OdooClient {
         id: Date.now(),
         params,
       }),
+      // @ts-ignore - Node.js fetch supports agent option
+      agent: url.startsWith('https:') ? this.httpsAgent : undefined,
     });
 
     // Extract session_id from Set-Cookie header

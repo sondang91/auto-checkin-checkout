@@ -60,7 +60,7 @@ const CONFIG_OVERRIDE_FILE = path.join(DATA_DIR, 'config-override.json');
  * Read config overrides from JSON file.
  * These take priority over env vars for editable fields.
  */
-function getOverrides(): Partial<EditableConfig> {
+export function getOverrides(): Partial<EditableConfig> {
   try {
     if (fs.existsSync(CONFIG_OVERRIDE_FILE)) {
       return JSON.parse(fs.readFileSync(CONFIG_OVERRIDE_FILE, 'utf-8'));
