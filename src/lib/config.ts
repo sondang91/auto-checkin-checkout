@@ -1,3 +1,6 @@
+import fs from 'fs';
+import path from 'path';
+
 export interface AppConfig {
   // Odoo Connection
   odooUrl: string;
@@ -24,6 +27,15 @@ export interface AppConfig {
   retryDelayMs: number;
 }
 
+/** Fields that can be edited from the dashboard */
+export interface EditableConfig {
+  checkinTime?: string;
+  checkoutTime?: string;
+  workingDays?: number[];
+  isEnabled?: boolean;
+  emailEnabled?: boolean;
+}
+
 const DEFAULT_CONFIG: AppConfig = {
   odooUrl: '',
   odooUsername: '',
@@ -41,21 +53,53 @@ const DEFAULT_CONFIG: AppConfig = {
   retryDelayMs: 5000,
 };
 
+const DATA_DIR = path.join(process.cwd(), 'data');
+const CONFIG_OVERRIDE_FILE = path.join(DATA_DIR, 'config-override.json');
+
+/**
+ * Read config overrides from JSON file.
+ * These take priority over env vars for editable fields.
+ */
+function getOverrides(): Partial<EditableConfig> {
+  try {
+    if (fs.existsSync(CONFIG_OVERRIDE_FILE)) {
+      return JSON.parse(fs.readFileSync(CONFIG_OVERRIDE_FILE, 'utf-8'));
+    }
+  } catch {
+    // ignore
+  }
+  return {};
+}
+
+/**
+ * Save config overrides to JSON file.
+ */
+export function saveOverrides(overrides: EditableConfig): void {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+  const current = getOverrides();
+  const merged = { ...current, ...overrides };
+  fs.writeFileSync(CONFIG_OVERRIDE_FILE, JSON.stringify(merged, null, 2));
+}
+
 export function getConfig(): AppConfig {
+  const overrides = getOverrides();
+
   return {
     odooUrl: process.env.ODOO_URL || DEFAULT_CONFIG.odooUrl,
     odooUsername: process.env.ODOO_USERNAME || DEFAULT_CONFIG.odooUsername,
     odooPassword: process.env.ODOO_PASSWORD || DEFAULT_CONFIG.odooPassword,
     odooDatabase: process.env.ODOO_DATABASE || DEFAULT_CONFIG.odooDatabase,
-    checkinTime: process.env.CHECKIN_TIME || DEFAULT_CONFIG.checkinTime,
-    checkoutTime: process.env.CHECKOUT_TIME || DEFAULT_CONFIG.checkoutTime,
+    checkinTime: overrides.checkinTime || process.env.CHECKIN_TIME || DEFAULT_CONFIG.checkinTime,
+    checkoutTime: overrides.checkoutTime || process.env.CHECKOUT_TIME || DEFAULT_CONFIG.checkoutTime,
     timezone: process.env.TIMEZONE || DEFAULT_CONFIG.timezone,
-    workingDays: process.env.WORKING_DAYS
+    workingDays: overrides.workingDays || (process.env.WORKING_DAYS
       ? process.env.WORKING_DAYS.split(',').map(Number)
-      : DEFAULT_CONFIG.workingDays,
+      : DEFAULT_CONFIG.workingDays),
     randomDelayMin: Number(process.env.RANDOM_DELAY_MIN) || DEFAULT_CONFIG.randomDelayMin,
     randomDelayMax: Number(process.env.RANDOM_DELAY_MAX) || DEFAULT_CONFIG.randomDelayMax,
-    isEnabled: process.env.AUTOMATION_ENABLED !== 'false',
+    isEnabled: overrides.isEnabled !== undefined ? overrides.isEnabled : process.env.AUTOMATION_ENABLED !== 'false',
     headless: process.env.HEADLESS !== 'false',
     maxRetries: Number(process.env.MAX_RETRIES) || DEFAULT_CONFIG.maxRetries,
     retryDelayMs: Number(process.env.RETRY_DELAY_MS) || DEFAULT_CONFIG.retryDelayMs,
