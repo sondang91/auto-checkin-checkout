@@ -53,7 +53,8 @@ const DEFAULT_CONFIG: AppConfig = {
   retryDelayMs: 5000,
 };
 
-const DATA_DIR = path.join(process.cwd(), 'data');
+const isVercel = process.env.VERCEL === '1' || process.env.VERCEL_ENV !== undefined;
+const DATA_DIR = isVercel ? '/tmp' : path.join(process.cwd(), 'data');
 const CONFIG_OVERRIDE_FILE = path.join(DATA_DIR, 'config-override.json');
 
 /**

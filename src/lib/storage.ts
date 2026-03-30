@@ -12,55 +12,67 @@ export interface ExecutionLog {
   randomDelayApplied: number;
 }
 
-const DATA_DIR = path.join(process.cwd(), 'data');
+// Use /tmp on Vercel (serverless), data/ locally
+const isVercel = process.env.VERCEL === '1' || process.env.VERCEL_ENV !== undefined;
+const DATA_DIR = isVercel ? '/tmp' : path.join(process.cwd(), 'data');
 const LOGS_FILE = path.join(DATA_DIR, 'logs.json');
 const MAX_LOGS = 500;
 
 function ensureDataDir() {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+  } catch {
+    // ignore on serverless
   }
 }
 
 export function getLogs(limit = 50, offset = 0): ExecutionLog[] {
-  ensureDataDir();
-  if (!fs.existsSync(LOGS_FILE)) return [];
-
   try {
+    ensureDataDir();
+    if (!fs.existsSync(LOGS_FILE)) return [];
     const data = JSON.parse(fs.readFileSync(LOGS_FILE, 'utf-8')) as ExecutionLog[];
-    return data
-      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-      .slice(offset, offset + limit);
+    const sorted = [...data].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    return sorted.slice(offset, offset + limit);
   } catch {
     return [];
   }
 }
 
 export function addLog(log: ExecutionLog): void {
-  ensureDataDir();
-  let logs: ExecutionLog[] = [];
+  try {
+    ensureDataDir();
+    let logs: ExecutionLog[] = [];
 
-  if (fs.existsSync(LOGS_FILE)) {
-    try {
-      logs = JSON.parse(fs.readFileSync(LOGS_FILE, 'utf-8'));
-    } catch {
-      logs = [];
+    if (fs.existsSync(LOGS_FILE)) {
+      try {
+        logs = JSON.parse(fs.readFileSync(LOGS_FILE, 'utf-8'));
+      } catch {
+        logs = [];
+      }
     }
+
+    logs.unshift(log);
+
+    if (logs.length > MAX_LOGS) {
+      logs = logs.slice(0, MAX_LOGS);
+    }
+
+    fs.writeFileSync(LOGS_FILE, JSON.stringify(logs, null, 2));
+  } catch {
+    // Silently fail on serverless if /tmp is not writable
+    console.error('Failed to write log:', log.message);
   }
-
-  logs.unshift(log);
-
-  // Keep only the latest MAX_LOGS entries
-  if (logs.length > MAX_LOGS) {
-    logs = logs.slice(0, MAX_LOGS);
-  }
-
-  fs.writeFileSync(LOGS_FILE, JSON.stringify(logs, null, 2));
 }
 
 export function clearLogs(): void {
-  ensureDataDir();
-  fs.writeFileSync(LOGS_FILE, JSON.stringify([]));
+  try {
+    ensureDataDir();
+    fs.writeFileSync(LOGS_FILE, JSON.stringify([]));
+  } catch {
+    // ignore
+  }
 }
 
 export function getLogStats() {

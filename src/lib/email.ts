@@ -18,7 +18,9 @@ export interface EmailConfig {
 
 function getEmailOverride(): { emailEnabled?: boolean } {
   try {
-    const filePath = path.join(process.cwd(), 'data', 'config-override.json');
+    const isVercel = process.env.VERCEL === '1' || process.env.VERCEL_ENV !== undefined;
+    const dataDir = isVercel ? '/tmp' : path.join(process.cwd(), 'data');
+    const filePath = path.join(dataDir, 'config-override.json');
     if (fs.existsSync(filePath)) {
       return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
     }
