@@ -48,3 +48,28 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+
+/**
+ * GET /api/trigger?action=checkin&secret=xxx
+ * Alternative entry for external cron services (cron-job.org, etc.)
+ */
+export async function GET(request: NextRequest) {
+  const url = new URL(request.url);
+  const action = url.searchParams.get('action');
+  const secret = url.searchParams.get('secret') || request.headers.get('x-cron-secret');
+
+  const cronSecret = process.env.CRON_SECRET;
+  if (cronSecret && secret !== cronSecret) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  if (!action || !['checkin', 'checkout'].includes(action)) {
+    return NextResponse.json(
+      { error: 'Invalid action. Use ?action=checkin or ?action=checkout' },
+      { status: 400 }
+    );
+  }
+
+  const log = await executeAction(action as ActionType);
+  return NextResponse.json({ success: log.status === 'success', log });
+}
