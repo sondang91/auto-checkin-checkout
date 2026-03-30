@@ -57,16 +57,37 @@ export class OdooClient {
       }),
     });
 
-    // Extract session_id from Set-Cookie header
-    const setCookie = response.headers.get('set-cookie');
-    if (setCookie) {
-      const match = setCookie.match(/session_id=([^;]+)/);
+    // Extract session_id from Set-Cookie header (multiple methods for compatibility)
+    let cookieHeader: string | null = null;
+    try {
+      // Method 1: getSetCookie() (Node 20+)
+      const setCookies = (response.headers as unknown as { getSetCookie?: () => string[] }).getSetCookie?.();
+      if (setCookies && setCookies.length > 0) {
+        cookieHeader = setCookies.join('; ');
+      }
+    } catch { /* ignore */ }
+
+    if (!cookieHeader) {
+      // Method 2: standard get
+      cookieHeader = response.headers.get('set-cookie');
+    }
+
+    if (cookieHeader) {
+      const match = /session_id=([^;]+)/.exec(cookieHeader);
       if (match) {
         this.sessionId = match[1];
       }
     }
 
-    const data = await response.json() as { result?: unknown; error?: { message: string; data?: { message: string } } };
+    const data = await response.json() as {
+      result?: unknown & { session_id?: string };
+      error?: { message: string; data?: { message: string } };
+    };
+
+    // Method 3: fallback - extract session_id from response body (authenticate endpoint)
+    if (!this.sessionId && data.result && typeof data.result === 'object' && 'session_id' in data.result) {
+      this.sessionId = (data.result as { session_id: string }).session_id;
+    }
 
     if (data.error) {
       const errorMsg = data.error.data?.message || data.error.message || 'Unknown Odoo error';
