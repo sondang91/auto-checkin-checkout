@@ -94,3 +94,104 @@ export async function getLogStats() {
     recentErrors: logs.filter((l) => l.status === 'failed').slice(0, 5),
   };
 }
+
+// ---------------------------------------------------------------------------
+// Leave Days
+// ---------------------------------------------------------------------------
+
+export interface LeaveDay {
+  id: string;        // uuid
+  date: string;      // YYYY-MM-DD
+  reason: string;    // e.g. "Nghỉ phép", "Việc cá nhân"
+  createdAt: string; // ISO timestamp
+}
+
+const LEAVES_KEY = 'auto_checkin:leave_days';
+
+export async function getLeaves(): Promise<LeaveDay[]> {
+  try {
+    const redis = getRedis();
+    const data = await redis.get<LeaveDay[]>(LEAVES_KEY);
+    return data ?? [];
+  } catch (err) {
+    console.error('[storage] getLeaves error:', err);
+    return [];
+  }
+}
+
+export async function addLeave(leave: LeaveDay): Promise<void> {
+  try {
+    const redis = getRedis();
+    const current = await getLeaves();
+    // Avoid duplicate dates — replace if same date exists
+    const filtered = current.filter((l) => l.date !== leave.date);
+    await redis.set(LEAVES_KEY, [...filtered, leave]);
+  } catch (err) {
+    console.error('[storage] addLeave error:', err);
+    throw err;
+  }
+}
+
+export async function removeLeave(id: string): Promise<void> {
+  try {
+    const redis = getRedis();
+    const current = await getLeaves();
+    await redis.set(LEAVES_KEY, current.filter((l) => l.id !== id));
+  } catch (err) {
+    console.error('[storage] removeLeave error:', err);
+    throw err;
+  }
+}
+
+export async function isLeaveDay(dateStr: string): Promise<{ isLeave: boolean; reason?: string }> {
+  const leaves = await getLeaves();
+  const match = leaves.find((l) => l.date === dateStr);
+  return { isLeave: !!match, reason: match?.reason };
+}
+
+// ---------------------------------------------------------------------------
+// Custom Holidays (user-added, separate from Odoo source)
+// ---------------------------------------------------------------------------
+
+export interface CustomHoliday {
+  id: string;         // uuid
+  name: string;       // e.g. "Tết Dương Lịch 2025"
+  date_from: string;  // YYYY-MM-DD
+  date_to: string;    // YYYY-MM-DD (can equal date_from for single day)
+  createdAt: string;  // ISO timestamp
+}
+
+const CUSTOM_HOLIDAYS_KEY = 'auto_checkin:custom_holidays';
+
+export async function getCustomHolidays(): Promise<CustomHoliday[]> {
+  try {
+    const redis = getRedis();
+    const data = await redis.get<CustomHoliday[]>(CUSTOM_HOLIDAYS_KEY);
+    return data ?? [];
+  } catch (err) {
+    console.error('[storage] getCustomHolidays error:', err);
+    return [];
+  }
+}
+
+export async function addCustomHoliday(holiday: CustomHoliday): Promise<void> {
+  try {
+    const redis = getRedis();
+    const current = await getCustomHolidays();
+    await redis.set(CUSTOM_HOLIDAYS_KEY, [...current, holiday]);
+  } catch (err) {
+    console.error('[storage] addCustomHoliday error:', err);
+    throw err;
+  }
+}
+
+export async function removeCustomHoliday(id: string): Promise<void> {
+  try {
+    const redis = getRedis();
+    const current = await getCustomHolidays();
+    await redis.set(CUSTOM_HOLIDAYS_KEY, current.filter((h) => h.id !== id));
+  } catch (err) {
+    console.error('[storage] removeCustomHoliday error:', err);
+    throw err;
+  }
+}

@@ -5,7 +5,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { Redis } from '@upstash/redis';
 import { getConfig } from '../config';
-import { addLog, type ExecutionLog } from '../storage';
+import { addLog, isLeaveDay, getCustomHolidays, type ExecutionLog } from '../storage';
 import { OdooClient, type PublicHoliday } from './odoo-client';
 import { sendNotification } from '../email';
 import dayjs from 'dayjs';
@@ -71,13 +71,23 @@ export async function getPublicHolidaysWithCache(): Promise<PublicHoliday[]> {
 
 /**
  * Check if a given YYYY-MM-DD date is a public holiday.
+ * Checks both Odoo-cached holidays AND user-added custom holidays.
  */
 export async function isPublicHoliday(dateStr?: string): Promise<{ isHoliday: boolean; holidayName?: string }> {
   const config = await getConfig();
   const today = dateStr ?? dayjs().tz(config.timezone).format('YYYY-MM-DD');
-  const holidays = await getPublicHolidaysWithCache();
-  const match = holidays.find((h) => today >= h.date_from && today <= h.date_to);
-  return { isHoliday: !!match, holidayName: match?.name };
+
+  // Check Odoo holidays (cached)
+  const odooHolidays = await getPublicHolidaysWithCache();
+  const odooMatch = odooHolidays.find((h) => today >= h.date_from && today <= h.date_to);
+  if (odooMatch) return { isHoliday: true, holidayName: odooMatch.name };
+
+  // Check custom holidays stored in Redis
+  const customHolidays = await getCustomHolidays();
+  const customMatch = customHolidays.find((h) => today >= h.date_from && today <= h.date_to);
+  if (customMatch) return { isHoliday: true, holidayName: customMatch.name };
+
+  return { isHoliday: false };
 }
 
 /**
@@ -218,6 +228,19 @@ export async function executeAction(action: ActionType): Promise<ExecutionLog> {
     const log = makeLog(
       logId, action, 'skipped',
       `🎌 Hôm nay là ngày lễ: "${holidayName}". Bỏ qua check-in/out.`,
+      startTime
+    );
+    await addLog(log);
+    return log;
+  }
+
+  // Guard: manual leave day
+  const todayStr = dayjs().tz(config.timezone).format('YYYY-MM-DD');
+  const { isLeave, reason: leaveReason } = await isLeaveDay(todayStr);
+  if (isLeave) {
+    const log = makeLog(
+      logId, action, 'skipped',
+      `🏢 Hôm nay là ngày nghỉ: "${leaveReason}". Bỏ qua check-in/out.`,
       startTime
     );
     await addLog(log);

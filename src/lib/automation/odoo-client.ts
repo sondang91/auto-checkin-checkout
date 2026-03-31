@@ -328,8 +328,9 @@ export class OdooClient {
     if (!this.uid) throw new Error('Not authenticated');
 
     const now = new Date();
-    const yearFrom = fromYear ?? now.getFullYear();
-    const yearTo = toYear ?? now.getFullYear() + 1;
+    // Default: fetch previous year, current year, and next year (if data exists)
+    const yearFrom = fromYear ?? (now.getFullYear() - 1);
+    const yearTo = toYear ?? (now.getFullYear() + 1);
 
     const dateFrom = `${yearFrom}-01-01`;
     const dateTo   = `${yearTo}-12-31`;
@@ -344,7 +345,7 @@ export class OdooClient {
       kwargs: {
         fields: ['id', 'name', 'date_from', 'date_to'],
         order:  'date_from asc',
-        limit:  200,
+        limit:  500,
       },
     }) as Array<{ id: number; name: string; date_from: string; date_to: string }>;
 

@@ -40,10 +40,18 @@ interface EmailConfig {
 }
 
 interface PublicHoliday {
-  id: number;
+  id: string | number;
   name: string;
   date_from: string;
   date_to: string;
+  source: 'odoo' | 'custom';
+}
+
+interface LeaveDay {
+  id: string;
+  date: string;
+  reason: string;
+  createdAt: string;
 }
 
 const DAY_NAMES = ['', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'];
@@ -64,17 +72,29 @@ export default function Dashboard() {
   const [isHolidayToday, setIsHolidayToday] = useState(false);
   const [todayHolidayName, setTodayHolidayName] = useState<string | null>(null);
   const [holidayRefreshing, setHolidayRefreshing] = useState(false);
+  const [newHolidayName, setNewHolidayName] = useState('');
+  const [newHolidayFrom, setNewHolidayFrom] = useState('');
+  const [newHolidayTo, setNewHolidayTo] = useState('');
+  const [holidayAddLoading, setHolidayAddLoading] = useState(false);
+  const [leaves, setLeaves] = useState<LeaveDay[]>([]);
+  const [isLeaveToday, setIsLeaveToday] = useState(false);
+  const [todayLeaveReason, setTodayLeaveReason] = useState<string | null>(null);
+  const [newLeaveDate, setNewLeaveDate] = useState('');
+  const [newLeaveReason, setNewLeaveReason] = useState('Nghỉ phép');
+  const [leaveLoading, setLeaveLoading] = useState(false);
 
   const fetchData = useCallback(async () => {
     try {
-      const [logsRes, configRes, holidaysRes] = await Promise.all([
+      const [logsRes, configRes, holidaysRes, leavesRes] = await Promise.all([
         fetch('/api/logs'),
         fetch('/api/config'),
         fetch('/api/holidays'),
+        fetch('/api/leaves'),
       ]);
       const logsData = await logsRes.json();
       const configData = await configRes.json();
       const holidaysData = await holidaysRes.json();
+      const leavesData = await leavesRes.json();
 
       setLogs(logsData.logs || []);
       setStats(logsData.stats || null);
@@ -85,6 +105,14 @@ export default function Dashboard() {
         setHolidays(holidaysData.holidays || []);
         setIsHolidayToday(!!holidaysData.isHolidayToday);
         setTodayHolidayName(holidaysData.todayHolidayName ?? null);
+      }
+      if (leavesData.success) {
+        const leaveList: LeaveDay[] = leavesData.leaves || [];
+        setLeaves(leaveList);
+        const todayISO = new Date().toISOString().slice(0, 10);
+        const todayLeave = leaveList.find((l) => l.date === todayISO);
+        setIsLeaveToday(!!todayLeave);
+        setTodayLeaveReason(todayLeave?.reason ?? null);
       }
     } catch (err) {
       console.error('Failed to fetch data:', err);
@@ -192,7 +220,6 @@ export default function Dashboard() {
   const refreshHolidays = async () => {
     setHolidayRefreshing(true);
     try {
-      // Invalidate cache then re-fetch
       await fetch('/api/holidays', { method: 'DELETE' });
       const res = await fetch('/api/holidays');
       const data = await res.json();
@@ -200,12 +227,105 @@ export default function Dashboard() {
         setHolidays(data.holidays || []);
         setIsHolidayToday(!!data.isHolidayToday);
         setTodayHolidayName(data.todayHolidayName ?? null);
-        setTestResult({ success: true, message: `🎌 Đã làm mới: ${data.count} ngày lễ từ Odoo` });
+        setTestResult({ success: true, message: `🎌 Đã làm mới: ${data.odooCount ?? data.count} ngày lễ từ Odoo` });
       }
     } catch {
       setTestResult({ success: false, message: 'Lỗi khi tải danh sách ngày lễ' });
     } finally {
       setHolidayRefreshing(false);
+    }
+  };
+
+  const addCustomHolidayHandler = async () => {
+    if (!newHolidayName || !newHolidayFrom) {
+      setTestResult({ success: false, message: 'Vui lòng nhập tên và ngày bắt đầu' });
+      return;
+    }
+    setHolidayAddLoading(true);
+    try {
+      const res = await fetch('/api/holidays', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: newHolidayName,
+          date_from: newHolidayFrom,
+          date_to: newHolidayTo || newHolidayFrom,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setTestResult({ success: true, message: `🎌 Đã thêm ngày lễ: ${newHolidayName}` });
+        setNewHolidayName(''); setNewHolidayFrom(''); setNewHolidayTo('');
+        fetchData();
+      } else {
+        setTestResult({ success: false, message: data.error || 'Lỗi thêm ngày lễ' });
+      }
+    } catch {
+      setTestResult({ success: false, message: 'Lỗi kết nối server' });
+    } finally {
+      setHolidayAddLoading(false);
+    }
+  };
+
+  const removeCustomHolidayHandler = async (id: string | number) => {
+    try {
+      const res = await fetch('/api/holidays', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setTestResult({ success: true, message: '🗑️ Đã xóa ngày lễ thủ công' });
+        fetchData();
+      }
+    } catch {
+      setTestResult({ success: false, message: 'Lỗi xóa' });
+    }
+  };
+
+  const addLeave = async () => {
+    if (!newLeaveDate) {
+      setTestResult({ success: false, message: 'Vui lòng chọn ngày nghỉ' });
+      return;
+    }
+    setLeaveLoading(true);
+    try {
+      const res = await fetch('/api/leaves', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: newLeaveDate, reason: newLeaveReason || 'Nghỉ phép' }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setTestResult({ success: true, message: `🏢 Đã thêm ngày nghỉ: ${newLeaveDate}` });
+        setNewLeaveDate('');
+        setNewLeaveReason('Nghỉ phép');
+        fetchData();
+      } else {
+        setTestResult({ success: false, message: data.error || 'Lỗi thêm ngày' });
+      }
+    } catch {
+      setTestResult({ success: false, message: 'Lỗi kết nối server' });
+    } finally {
+      setLeaveLoading(false);
+    }
+  };
+
+  const removeLeave = async (id: string) => {
+    try {
+      const res = await fetch('/api/leaves', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setTestResult({ success: true, message: '🗑️ Đã xóa ngày nghỉ' });
+        fetchData();
+      }
+    } catch {
+      setTestResult({ success: false, message: 'Lỗi xóa ngày' });
     }
   };
 
@@ -409,16 +529,17 @@ export default function Dashboard() {
 
       {/* Public Holidays Card */}
       <div className="card animate-fade-in" style={{ marginBottom: 24 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 16, gap: 12 }}>
           <div>
-            <h2 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>🎌 Ngày Lễ (từ Odoo)</h2>
+            <h2 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>🎌 Ngày Lễ</h2>
             <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '4px 0 0' }}>
               Hệ thống sẽ tự động bỏ qua check-in/out vào các ngày này
             </p>
           </div>
           <button
             className="btn btn-outline"
-            style={{ fontSize: 12, padding: '6px 12px' }}
+            style={{ fontSize: 12, padding: '6px 12px', whiteSpace: 'nowrap' }}
             disabled={holidayRefreshing}
             onClick={refreshHolidays}
           >
@@ -426,10 +547,43 @@ export default function Dashboard() {
           </button>
         </div>
 
+        {/* Add custom holiday form */}
+        <div style={{
+          display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap',
+          padding: '14px', background: 'rgba(245,158,11,0.05)',
+          borderRadius: 10, border: '1px solid rgba(245,158,11,0.2)',
+        }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 2, minWidth: 140 }}>
+            <label htmlFor="h-name" style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Tên ngày lễ</label>
+            <input id="h-name" type="text" value={newHolidayName} onChange={(e) => setNewHolidayName(e.target.value)}
+              placeholder="Tết Dương Lịch 2025..."
+              style={{ padding: '8px 12px', borderRadius: 8, fontSize: 13, background: 'var(--bg-primary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)', outline: 'none' }} />
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: '0 0 auto' }}>
+            <label htmlFor="h-from" style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Từ ngày</label>
+            <input id="h-from" type="date" value={newHolidayFrom} onChange={(e) => setNewHolidayFrom(e.target.value)}
+              style={{ padding: '8px 12px', borderRadius: 8, fontSize: 13, background: 'var(--bg-primary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)', outline: 'none', fontFamily: 'var(--font-mono)' }} />
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: '0 0 auto' }}>
+            <label htmlFor="h-to" style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Đến ngày</label>
+            <input id="h-to" type="date" value={newHolidayTo} onChange={(e) => setNewHolidayTo(e.target.value)}
+              style={{ padding: '8px 12px', borderRadius: 8, fontSize: 13, background: 'var(--bg-primary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)', outline: 'none', fontFamily: 'var(--font-mono)' }} />
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }}>
+            <button className="btn btn-primary"
+              style={{ fontSize: 13, padding: '8px 18px', background: '#f59e0b', border: 'none', color: '#000' }}
+              disabled={holidayAddLoading || !newHolidayName || !newHolidayFrom}
+              onClick={addCustomHolidayHandler}>
+              {holidayAddLoading ? '⏳...' : '+ Thêm'}
+            </button>
+          </div>
+        </div>
+
+        {/* Table */}
         {holidays.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '32px 20px', color: 'var(--text-muted)' }}>
             <div style={{ fontSize: 36, marginBottom: 8 }}>📅</div>
-            <p style={{ margin: 0, fontSize: 13 }}>Chưa tải được danh sách ngày lễ. Nhấn &ldquo;Làm mới từ Odoo&rdquo; để tải.</p>
+            <p style={{ margin: 0, fontSize: 13 }}>Chưa có ngày lễ nào. Nhấn &ldquo;Làm mới từ Odoo&rdquo; hoặc thêm thủ công.</p>
           </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
@@ -440,6 +594,8 @@ export default function Dashboard() {
                   <th style={{ padding: '8px 12px', textAlign: 'center', color: 'var(--text-muted)', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 }}>Từ</th>
                   <th style={{ padding: '8px 12px', textAlign: 'center', color: 'var(--text-muted)', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 }}>Đến</th>
                   <th style={{ padding: '8px 12px', textAlign: 'center', color: 'var(--text-muted)', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 }}>Số ngày</th>
+                  <th style={{ padding: '8px 12px', textAlign: 'center', color: 'var(--text-muted)', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 }}>Nguồn</th>
+                  <th style={{ padding: '8px 12px', textAlign: 'right', color: 'var(--text-muted)', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 }}></th>
                 </tr>
               </thead>
               <tbody>
@@ -448,18 +604,18 @@ export default function Dashboard() {
                   const isActive = today >= h.date_from && today <= h.date_to;
                   const isPast = h.date_to < today;
                   const dayCount = Math.round((new Date(h.date_to).getTime() - new Date(h.date_from).getTime()) / 86400000) + 1;
+                  const isCustom = h.source === 'custom';
                   return (
-                    <tr
-                      key={h.id}
-                      style={{
-                        borderBottom: '1px solid var(--border-color)',
-                        background: isActive ? 'rgba(245,158,11,0.07)' : 'transparent',
-                        opacity: isPast ? 0.5 : 1,
-                      }}
-                    >
-                      <td style={{ padding: '10px 12px', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 8 }}>
-                        {isActive && <span style={{ fontSize: 10, background: 'var(--accent-amber)', color: '#000', borderRadius: 4, padding: '1px 5px', fontWeight: 700 }}>Hôm nay</span>}
-                        {h.name}
+                    <tr key={`${h.source}-${h.id}`} style={{
+                      borderBottom: '1px solid var(--border-color)',
+                      background: isActive ? 'rgba(245,158,11,0.07)' : 'transparent',
+                      opacity: isPast ? 0.5 : 1,
+                    }}>
+                      <td style={{ padding: '10px 12px', color: 'var(--text-primary)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          {isActive && <span style={{ fontSize: 10, background: 'var(--accent-amber)', color: '#000', borderRadius: 4, padding: '1px 5px', fontWeight: 700 }}>Hôm nay</span>}
+                          {h.name}
+                        </div>
                       </td>
                       <td style={{ padding: '10px 12px', textAlign: 'center', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
                         {h.date_from.split('-').reverse().join('/')}
@@ -470,11 +626,166 @@ export default function Dashboard() {
                       <td style={{ padding: '10px 12px', textAlign: 'center' }}>
                         <span style={{
                           display: 'inline-block', padding: '2px 8px', borderRadius: 6, fontSize: 12, fontWeight: 600,
-                          background: isActive ? 'var(--accent-amber-glow, rgba(245,158,11,0.1))' : 'var(--bg-card)',
+                          background: isActive ? 'rgba(245,158,11,0.1)' : 'var(--bg-card)',
                           color: isActive ? 'var(--accent-amber)' : 'var(--text-secondary)',
                         }}>
                           {dayCount} ngày
                         </span>
+                      </td>
+                      <td style={{ padding: '10px 12px', textAlign: 'center' }}>
+                        <span style={{
+                          fontSize: 10, fontWeight: 700, borderRadius: 4, padding: '2px 6px',
+                          background: isCustom ? 'rgba(139,92,246,0.15)' : 'rgba(59,130,246,0.15)',
+                          color: isCustom ? '#8b5cf6' : '#3b82f6',
+                        }}>
+                          {isCustom ? '✏️ Thủ công' : '🔗 Odoo'}
+                        </span>
+                      </td>
+                      <td style={{ padding: '10px 12px', textAlign: 'right' }}>
+                        {isCustom && (
+                          <button
+                            onClick={() => removeCustomHolidayHandler(h.id)}
+                            style={{
+                              background: 'none', border: '1px solid var(--accent-red)',
+                              color: 'var(--accent-red)', borderRadius: 6,
+                              padding: '3px 10px', cursor: 'pointer', fontSize: 12,
+                            }}
+                          >
+                            Xóa
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Leave Today Banner */}
+      {isLeaveToday && (
+        <div className="animate-fade-in" style={{
+          padding: '14px 20px', borderRadius: 12, marginBottom: 20,
+          background: 'rgba(139, 92, 246, 0.1)',
+          border: '1px solid #8b5cf6',
+          color: '#8b5cf6',
+          display: 'flex', alignItems: 'center', gap: 12, fontSize: 14,
+        }}>
+          <span style={{ fontSize: 24 }}>🏢</span>
+          <div>
+            <strong>Hôm nay bạn đang nghỉ: {todayLeaveReason}</strong>
+            <div style={{ fontSize: 12, marginTop: 2, opacity: 0.85 }}>
+              Hệ thống sẽ tự động bỏ qua check-in và check-out hôm nay.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Leave Days Card */}
+      <div className="card animate-fade-in" style={{ marginBottom: 24 }}>
+        <div style={{ marginBottom: 16 }}>
+          <h2 style={{ fontSize: 16, fontWeight: 700, margin: '0 0 4px' }}>🏢 Ngày Nghỉ Phép</h2>
+          <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0 }}>
+            Thêm ngày nghỉ thủ công — hệ thống sẽ không chạy check-in/out vào các ngày này
+          </p>
+        </div>
+
+        {/* Add leave form */}
+        <div style={{
+          display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap',
+          padding: '14px', background: 'rgba(139,92,246,0.05)',
+          borderRadius: 10, border: '1px solid rgba(139,92,246,0.2)',
+        }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: '0 0 auto' }}>
+            <label htmlFor="leave-date" style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Ngày</label>
+            <input
+              id="leave-date"
+              type="date"
+              value={newLeaveDate}
+              onChange={(e) => setNewLeaveDate(e.target.value)}
+              style={{
+                padding: '8px 12px', borderRadius: 8, fontSize: 13,
+                background: 'var(--bg-primary)', color: 'var(--text-primary)',
+                border: '1px solid var(--border-color)', outline: 'none',
+                fontFamily: 'var(--font-mono)',
+              }}
+            />
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1, minWidth: 140 }}>
+            <label htmlFor="leave-reason" style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Lý do</label>
+            <input
+              id="leave-reason"
+              type="text"
+              value={newLeaveReason}
+              onChange={(e) => setNewLeaveReason(e.target.value)}
+              placeholder="Nghỉ phép, Việc cá nhân..."
+              style={{
+                padding: '8px 12px', borderRadius: 8, fontSize: 13,
+                background: 'var(--bg-primary)', color: 'var(--text-primary)',
+                border: '1px solid var(--border-color)', outline: 'none',
+              }}
+            />
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }}>
+            <button
+              className="btn btn-primary"
+              style={{ fontSize: 13, padding: '8px 18px', background: '#8b5cf6', border: 'none' }}
+              disabled={leaveLoading || !newLeaveDate}
+              onClick={addLeave}
+            >
+              {leaveLoading ? '⏳...' : '+ Thêm'}
+            </button>
+          </div>
+        </div>
+
+        {/* Leave list */}
+        {leaves.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '24px 20px', color: 'var(--text-muted)' }}>
+            <div style={{ fontSize: 32, marginBottom: 8 }}>📆</div>
+            <p style={{ margin: 0, fontSize: 13 }}>Chưa có ngày nghỉ nào. Thêm ngày nghỉ bằng form trên.</p>
+          </div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
+                  <th style={{ padding: '8px 12px', textAlign: 'left', color: 'var(--text-muted)', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 }}>Ngày</th>
+                  <th style={{ padding: '8px 12px', textAlign: 'left', color: 'var(--text-muted)', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 }}>Lý do</th>
+                  <th style={{ padding: '8px 12px', textAlign: 'right', color: 'var(--text-muted)', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 }}>Thạo tác</th>
+                </tr>
+              </thead>
+              <tbody>
+                {leaves.map((l) => {
+                  const todayISO = new Date().toISOString().slice(0, 10);
+                  const isToday = l.date === todayISO;
+                  const isPast = l.date < todayISO;
+                  return (
+                    <tr key={l.id} style={{
+                      borderBottom: '1px solid var(--border-color)',
+                      background: isToday ? 'rgba(139,92,246,0.07)' : 'transparent',
+                      opacity: isPast ? 0.5 : 1,
+                    }}>
+                      <td style={{ padding: '10px 12px', color: 'var(--text-primary)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          {isToday && <span style={{ fontSize: 10, background: '#8b5cf6', color: '#fff', borderRadius: 4, padding: '1px 5px', fontWeight: 700 }}>Hôm nay</span>}
+                          {l.date.split('-').reverse().join('/')}
+                        </div>
+                      </td>
+                      <td style={{ padding: '10px 12px', color: 'var(--text-secondary)' }}>{l.reason}</td>
+                      <td style={{ padding: '10px 12px', textAlign: 'right' }}>
+                        <button
+                          onClick={() => removeLeave(l.id)}
+                          style={{
+                            background: 'none', border: '1px solid var(--accent-red)',
+                            color: 'var(--accent-red)', borderRadius: 6,
+                            padding: '3px 10px', cursor: 'pointer', fontSize: 12,
+                          }}
+                          title="Xóa ngày nghỉ"
+                        >
+                          Xóa
+                        </button>
                       </td>
                     </tr>
                   );
@@ -490,24 +801,47 @@ export default function Dashboard() {
         {/* Manual Actions */}
         <div className="card animate-fade-in">
           <h2 style={{ fontSize: 16, fontWeight: 700, margin: '0 0 16px' }}>🎯 Thao tác thủ công</h2>
-          <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
-            <button
-              className="btn btn-primary"
-              style={{ flex: 1 }}
-              disabled={!!actionLoading}
-              onClick={() => triggerAction('checkin')}
-            >
-              {actionLoading === 'checkin' ? '⏳ Đang xử lý...' : '🟢 Check-in'}
-            </button>
-            <button
-              className="btn btn-danger"
-              style={{ flex: 1 }}
-              disabled={!!actionLoading}
-              onClick={() => triggerAction('checkout')}
-            >
-              {actionLoading === 'checkout' ? '⏳ Đang xử lý...' : '🔴 Check-out'}
-            </button>
-          </div>
+          {(() => {
+            const isSkipDay = isHolidayToday || isLeaveToday;
+            let skipReason: string | null = null;
+            if (isHolidayToday) skipReason = `Ngày lễ: ${todayHolidayName}`;
+            else if (isLeaveToday) skipReason = `Ngày nghỉ: ${todayLeaveReason}`;
+            return (
+              <>
+                <div style={{ display: 'flex', gap: 12, marginBottom: skipReason ? 8 : 16 }}>
+                  <button
+                    className="btn btn-primary"
+                    style={{ flex: 1, opacity: isSkipDay ? 0.45 : 1 }}
+                    disabled={!!actionLoading || isSkipDay}
+                    title={skipReason ?? undefined}
+                    onClick={() => triggerAction('checkin')}
+                  >
+                    {actionLoading === 'checkin' ? '⏳ Đang xử lý...' : '🟢 Check-in'}
+                  </button>
+                  <button
+                    className="btn btn-danger"
+                    style={{ flex: 1, opacity: isSkipDay ? 0.45 : 1 }}
+                    disabled={!!actionLoading || isSkipDay}
+                    title={skipReason ?? undefined}
+                    onClick={() => triggerAction('checkout')}
+                  >
+                    {actionLoading === 'checkout' ? '⏳ Đang xử lý...' : '🔴 Check-out'}
+                  </button>
+                </div>
+                {skipReason && (
+                  <div style={{
+                    fontSize: 12, color: 'var(--text-muted)',
+                    background: 'rgba(255,255,255,0.04)',
+                    borderRadius: 8, padding: '8px 12px',
+                    marginBottom: 16, display: 'flex', alignItems: 'center', gap: 6,
+                  }}>
+                    <span>⛔</span>
+                    <span>Check-in/out đã bị vô hiệu hóa — {skipReason}</span>
+                  </div>
+                )}
+              </>
+            );
+          })()}
           <div style={{ display: 'flex', gap: 12 }}>
             <button
               className="btn btn-outline"
