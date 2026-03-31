@@ -5,9 +5,12 @@ import { getEmailConfig, sendNotification } from '@/lib/email';
 import { addLog } from '@/lib/storage';
 
 export async function GET() {
-  const config = getConfigSafe();
-  const emailConfig = getEmailConfig();
-  const errors = validateConfig(getConfig());
+  const [config, emailConfig] = await Promise.all([
+    getConfigSafe(),
+    Promise.resolve(getEmailConfig()),
+  ]);
+  const fullConfig = await getConfig();
+  const errors = validateConfig(fullConfig);
 
   return NextResponse.json({
     config,
@@ -72,10 +75,10 @@ export async function PUT(request: NextRequest) {
       'Thời gian': new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }),
     }).catch(() => {});
 
-    saveOverrides(updates);
+    await saveOverrides(updates);
 
     // Log config change
-    addLog({
+    await addLog({
       id: uuidv4(),
       timestamp: new Date().toISOString(),
       action: 'config_change',
@@ -88,7 +91,7 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({
       success: true,
       message: 'Cấu hình đã được cập nhật',
-      config: getConfigSafe(),
+      config: await getConfigSafe(),
     });
   } catch (error) {
     return NextResponse.json(

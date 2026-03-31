@@ -19,8 +19,8 @@ export type ActionType = 'checkin' | 'checkout';
 /**
  * Check if today is a working day
  */
-export function isWorkingDay(): boolean {
-  const config = getConfig();
+export async function isWorkingDay(): Promise<boolean> {
+  const config = await getConfig();
   const now = dayjs().tz(config.timezone);
   // dayjs: 0=Sun, 1=Mon, ..., 6=Sat → convert to 1=Mon, ..., 7=Sun
   const dayOfWeek = now.day() === 0 ? 7 : now.day();
@@ -30,10 +30,10 @@ export function isWorkingDay(): boolean {
 /**
  * Check if it's time to perform an action
  */
-export function shouldRunNow(action: ActionType): boolean {
-  const config = getConfig();
+export async function shouldRunNow(action: ActionType): Promise<boolean> {
+  const config = await getConfig();
   if (!config.isEnabled) return false;
-  if (!isWorkingDay()) return false;
+  if (!(await isWorkingDay())) return false;
 
   const now = dayjs().tz(config.timezone);
   const currentTime = now.format('HH:mm');
@@ -42,68 +42,58 @@ export function shouldRunNow(action: ActionType): boolean {
   return currentTime === targetTime;
 }
 
-/**
- * Execute check-in or check-out with retry logic
- */
-export async function executeAction(action: ActionType): Promise<ExecutionLog> {
-  const config = getConfig();
-  const startTime = Date.now();
-  const logId = uuidv4();
+// ---------------------------------------------------------------------------
+// Helpers (extracted to reduce cognitive complexity)
+// ---------------------------------------------------------------------------
 
-  // Validate config
-  if (!config.odooUrl || !config.odooUsername || !config.odooPassword) {
-    const log: ExecutionLog = {
-      id: logId,
-      timestamp: new Date().toISOString(),
-      action,
-      status: 'failed',
-      message: 'Missing Odoo credentials. Check your configuration.',
-      executionTimeMs: Date.now() - startTime,
-      randomDelayApplied: 0,
-    };
-    addLog(log);
-    return log;
-  }
+function makeLog(
+  logId: string,
+  action: ActionType,
+  status: ExecutionLog['status'],
+  message: string,
+  startTime: number
+): ExecutionLog {
+  return {
+    id: logId,
+    timestamp: new Date().toISOString(),
+    action,
+    status,
+    message,
+    executionTimeMs: Date.now() - startTime,
+    randomDelayApplied: 0,
+  };
+}
 
-  // Skip if not a working day
-  if (!isWorkingDay()) {
-    const log: ExecutionLog = {
-      id: logId,
-      timestamp: new Date().toISOString(),
-      action,
-      status: 'skipped',
-      message: 'Hôm nay không phải ngày làm việc.',
-      executionTimeMs: Date.now() - startTime,
-      randomDelayApplied: 0,
-    };
-    addLog(log);
-    return log;
-  }
+async function tryOdooAction(
+  action: ActionType,
+  client: OdooClient,
+  database: string,
+  username: string,
+  password: string
+) {
+  await client.authenticate(database, username, password);
+  return action === 'checkin' ? client.checkin() : client.checkout();
+}
 
+interface RetryContext {
+  action: ActionType;
+  logId: string;
+  startTime: number;
+  config: Awaited<ReturnType<typeof getConfig>>;
+}
+
+/** Attempt Odoo action with retries. Returns ExecutionLog on success, null if all retries failed. */
+async function runWithRetry(ctx: RetryContext): Promise<{ log: ExecutionLog; lastError: string }> {
+  const { action, logId, startTime, config } = ctx;
   let lastError = '';
 
   for (let attempt = 1; attempt <= config.maxRetries; attempt++) {
     try {
       const client = new OdooClient(config.odooUrl);
-      await client.authenticate(config.odooDatabase, config.odooUsername, config.odooPassword);
+      const result = await tryOdooAction(action, client, config.odooDatabase, config.odooUsername, config.odooPassword);
+      const log = makeLog(logId, action, result.success ? 'success' : 'failed', result.message, startTime);
 
-      const result = action === 'checkin'
-        ? await client.checkin()
-        : await client.checkout();
-
-      const log: ExecutionLog = {
-        id: logId,
-        timestamp: new Date().toISOString(),
-        action,
-        status: result.success ? 'success' : 'failed',
-        message: result.message,
-        executionTimeMs: Date.now() - startTime,
-        randomDelayApplied: 0,
-      };
-
-      addLog(log);
-
-      // Send email notification
+      await addLog(log);
       await sendNotification(action, log.status as 'success' | 'failed', log.message, {
         'Hành động': action === 'checkin' ? 'Check-in' : 'Check-out',
         'Trạng thái': log.status === 'success' ? 'Thành công' : 'Thất bại',
@@ -111,33 +101,54 @@ export async function executeAction(action: ActionType): Promise<ExecutionLog> {
         'Thời gian xử lý': `${log.executionTimeMs}ms`,
       }).catch(() => { /* email failure shouldn't break the flow */ });
 
-      return log;
+      return { log, lastError: '' };
     } catch (error) {
       lastError = error instanceof Error ? error.message : 'Unknown error';
-      if (attempt < config.maxRetries) {
+      const isLastAttempt = attempt === config.maxRetries;
+      if (!isLastAttempt) {
         await new Promise(r => setTimeout(r, config.retryDelayMs));
       }
     }
   }
 
-  // All retries failed
-  const log: ExecutionLog = {
-    id: logId,
-    timestamp: new Date().toISOString(),
-    action,
-    status: 'failed',
-    message: `Thất bại sau ${config.maxRetries} lần thử. Lỗi: ${lastError}`,
-    executionTimeMs: Date.now() - startTime,
-    randomDelayApplied: 0,
-  };
+  return { log: makeLog(logId, action, 'failed', '', startTime), lastError };
+}
 
-  addLog(log);
+/**
+ * Execute check-in or check-out with retry logic
+ */
+export async function executeAction(action: ActionType): Promise<ExecutionLog> {
+  const config = await getConfig();
+  const startTime = Date.now();
+  const logId = uuidv4();
 
-  await sendNotification(action, 'failed', log.message, {
+  // Guard: missing credentials
+  if (!config.odooUrl || !config.odooUsername || !config.odooPassword) {
+    const log = makeLog(logId, action, 'failed', 'Missing Odoo credentials. Check your configuration.', startTime);
+    await addLog(log);
+    return log;
+  }
+
+  // Guard: not a working day
+  if (!(await isWorkingDay())) {
+    const log = makeLog(logId, action, 'skipped', 'Hôm nay không phải ngày làm việc.', startTime);
+    await addLog(log);
+    return log;
+  }
+
+  const { log, lastError } = await runWithRetry({ action, logId, startTime, config });
+
+  if (!lastError) return log; // success or non-retry failure handled inside runWithRetry
+
+  // All retries failed – build final failure log
+  const failLog = makeLog(logId, action, 'failed', `Thất bại sau ${config.maxRetries} lần thử. Lỗi: ${lastError}`, startTime);
+  await addLog(failLog);
+  await sendNotification(action, 'failed', failLog.message, {
     'Hành động': action === 'checkin' ? 'Check-in' : 'Check-out',
     'Số lần thử': `${config.maxRetries}`,
     'Lỗi cuối': lastError,
   }).catch(() => {});
 
-  return log;
+  return failLog;
 }
+
