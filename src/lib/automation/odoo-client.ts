@@ -24,7 +24,7 @@ export interface AttendanceResult {
 }
 
 export class OdooClient {
-  private baseUrl: string;
+  private readonly baseUrl: string;
   private sessionId: string | null = null;
   private uid: number | null = null;
 
@@ -36,14 +36,16 @@ export class OdooClient {
   /**
    * Make a JSON-RPC call to Odoo
    */
-  private async rpc(endpoint: string, params: Record<string, unknown>): Promise<unknown> {
+  private async rpc(endpoint: string, params: Record<string, unknown>, retryOnAbort = true): Promise<unknown> {
     const url = `${this.baseUrl}${endpoint}`;
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };
 
     if (this.sessionId) {
+      // Odoo expects session in BOTH headers for reliable delivery
       headers['Cookie'] = `session_id=${this.sessionId}`;
+      headers['X-Openerp-Session-Id'] = this.sessionId;
     }
 
     const response = await fetch(url, {
@@ -80,7 +82,7 @@ export class OdooClient {
     }
 
     const data = await response.json() as {
-      result?: unknown & { session_id?: string };
+      result?: { session_id?: string } | Record<string, unknown>;
       error?: { message: string; data?: { message: string } };
     };
 
@@ -91,6 +93,15 @@ export class OdooClient {
 
     if (data.error) {
       const errorMsg = data.error.data?.message || data.error.message || 'Unknown Odoo error';
+
+      // Retry once if Odoo reports a transaction-aborted error (PostgreSQL race condition)
+      const isTransactionAborted = errorMsg.includes('transaction is aborted') || errorMsg.includes('InternalError');
+      if (isTransactionAborted && retryOnAbort) {
+        // Small delay to let Odoo rollback the aborted transaction
+        await new Promise(r => setTimeout(r, 800));
+        return this.rpc(endpoint, params, false /* no more retries */);
+      }
+
       throw new Error(`Odoo RPC Error: ${errorMsg}`);
     }
 
@@ -138,6 +149,10 @@ export class OdooClient {
     }
 
     this.uid = result.uid;
+
+    // Odoo cần một chút thời gian để commit session transaction trước khi nhận request tiếp theo
+    // Bỏ qua delay này có thể gây lỗi "transaction is aborted" ở request kế tiếp
+    await new Promise(r => setTimeout(r, 300));
 
     return {
       sessionId: this.sessionId || result.session_id,
