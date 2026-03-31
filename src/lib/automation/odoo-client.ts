@@ -23,6 +23,13 @@ export interface AttendanceResult {
   hoursToday?: number;
 }
 
+export interface PublicHoliday {
+  id: number;
+  name: string;
+  date_from: string; // ISO date string 'YYYY-MM-DD'
+  date_to: string;   // ISO date string 'YYYY-MM-DD'
+}
+
 export class OdooClient {
   private readonly baseUrl: string;
   private sessionId: string | null = null;
@@ -311,5 +318,48 @@ export class OdooClient {
         message: `Kết nối thất bại: ${error instanceof Error ? error.message : 'Unknown error'}`,
       };
     }
+  }
+
+  /**
+   * Fetch public holidays from Odoo (hr.public.holiday model).
+   * Optionally filter by year; defaults to current + next year to ensure we have coverage.
+   */
+  async getPublicHolidays(fromYear?: number, toYear?: number): Promise<PublicHoliday[]> {
+    if (!this.uid) throw new Error('Not authenticated');
+
+    const now = new Date();
+    const yearFrom = fromYear ?? now.getFullYear();
+    const yearTo = toYear ?? now.getFullYear() + 1;
+
+    const dateFrom = `${yearFrom}-01-01`;
+    const dateTo   = `${yearTo}-12-31`;
+
+    const result = await this.rpc('/web/dataset/call_kw/hr.public.holiday/search_read', {
+      model:  'hr.public.holiday',
+      method: 'search_read',
+      args: [[
+        ['date_to',   '>=', dateFrom],
+        ['date_from', '<=', dateTo],
+      ]],
+      kwargs: {
+        fields: ['id', 'name', 'date_from', 'date_to'],
+        order:  'date_from asc',
+        limit:  200,
+      },
+    }) as Array<{ id: number; name: string; date_from: string; date_to: string }>;
+
+    return (result ?? []).map((h) => ({
+      id:        h.id,
+      name:      h.name,
+      date_from: h.date_from.slice(0, 10), // strip time part if any
+      date_to:   h.date_to.slice(0, 10),
+    }));
+  }
+
+  /**
+   * Returns true if the given date string (YYYY-MM-DD) falls within any public holiday.
+   */
+  isDatePublicHoliday(date: string, holidays: PublicHoliday[]): boolean {
+    return holidays.some((h) => date >= h.date_from && date <= h.date_to);
   }
 }

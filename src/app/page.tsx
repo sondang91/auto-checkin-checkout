@@ -39,6 +39,13 @@ interface EmailConfig {
   emailTo: string;
 }
 
+interface PublicHoliday {
+  id: number;
+  name: string;
+  date_from: string;
+  date_to: string;
+}
+
 const DAY_NAMES = ['', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'];
 
 export default function Dashboard() {
@@ -53,21 +60,32 @@ export default function Dashboard() {
   const [now, setNow] = useState(new Date());
   const [editing, setEditing] = useState<'checkin' | 'checkout' | null>(null);
   const [editValue, setEditValue] = useState('');
+  const [holidays, setHolidays] = useState<PublicHoliday[]>([]);
+  const [isHolidayToday, setIsHolidayToday] = useState(false);
+  const [todayHolidayName, setTodayHolidayName] = useState<string | null>(null);
+  const [holidayRefreshing, setHolidayRefreshing] = useState(false);
 
   const fetchData = useCallback(async () => {
     try {
-      const [logsRes, configRes] = await Promise.all([
+      const [logsRes, configRes, holidaysRes] = await Promise.all([
         fetch('/api/logs'),
         fetch('/api/config'),
+        fetch('/api/holidays'),
       ]);
       const logsData = await logsRes.json();
       const configData = await configRes.json();
+      const holidaysData = await holidaysRes.json();
 
       setLogs(logsData.logs || []);
       setStats(logsData.stats || null);
       setConfig(configData.config || null);
       setEmailConfig(configData.email || null);
       setConfigErrors(configData.errors || []);
+      if (holidaysData.success) {
+        setHolidays(holidaysData.holidays || []);
+        setIsHolidayToday(!!holidaysData.isHolidayToday);
+        setTodayHolidayName(holidaysData.todayHolidayName ?? null);
+      }
     } catch (err) {
       console.error('Failed to fetch data:', err);
     } finally {
@@ -171,6 +189,26 @@ export default function Dashboard() {
     fetchData();
   };
 
+  const refreshHolidays = async () => {
+    setHolidayRefreshing(true);
+    try {
+      // Invalidate cache then re-fetch
+      await fetch('/api/holidays', { method: 'DELETE' });
+      const res = await fetch('/api/holidays');
+      const data = await res.json();
+      if (data.success) {
+        setHolidays(data.holidays || []);
+        setIsHolidayToday(!!data.isHolidayToday);
+        setTodayHolidayName(data.todayHolidayName ?? null);
+        setTestResult({ success: true, message: `🎌 Đã làm mới: ${data.count} ngày lễ từ Odoo` });
+      }
+    } catch {
+      setTestResult({ success: false, message: 'Lỗi khi tải danh sách ngày lễ' });
+    } finally {
+      setHolidayRefreshing(false);
+    }
+  };
+
   const formatTime = (dateStr: string) => {
     const d = new Date(dateStr);
     return d.toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
@@ -222,6 +260,25 @@ export default function Dashboard() {
           </div>
         </div>
       </header>
+
+      {/* Today is Holiday Banner */}
+      {isHolidayToday && (
+        <div className="animate-fade-in" style={{
+          padding: '14px 20px', borderRadius: 12, marginBottom: 20,
+          background: 'rgba(245, 158, 11, 0.1)',
+          border: '1px solid var(--accent-amber)',
+          color: 'var(--accent-amber)',
+          display: 'flex', alignItems: 'center', gap: 12, fontSize: 14,
+        }}>
+          <span style={{ fontSize: 24 }}>🎌</span>
+          <div>
+            <strong>Hôm nay là ngày lễ: {todayHolidayName}</strong>
+            <div style={{ fontSize: 12, marginTop: 2, opacity: 0.85 }}>
+              Hệ thống sẽ tự động bỏ qua check-in và check-out hôm nay.
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Alert for test results */}
       {testResult && (
@@ -348,6 +405,84 @@ export default function Dashboard() {
             )}
           </div>
         </div>
+      </div>
+
+      {/* Public Holidays Card */}
+      <div className="card animate-fade-in" style={{ marginBottom: 24 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+          <div>
+            <h2 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>🎌 Ngày Lễ (từ Odoo)</h2>
+            <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '4px 0 0' }}>
+              Hệ thống sẽ tự động bỏ qua check-in/out vào các ngày này
+            </p>
+          </div>
+          <button
+            className="btn btn-outline"
+            style={{ fontSize: 12, padding: '6px 12px' }}
+            disabled={holidayRefreshing}
+            onClick={refreshHolidays}
+          >
+            {holidayRefreshing ? '⏳ Đang tải...' : '🔄 Làm mới từ Odoo'}
+          </button>
+        </div>
+
+        {holidays.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '32px 20px', color: 'var(--text-muted)' }}>
+            <div style={{ fontSize: 36, marginBottom: 8 }}>📅</div>
+            <p style={{ margin: 0, fontSize: 13 }}>Chưa tải được danh sách ngày lễ. Nhấn &ldquo;Làm mới từ Odoo&rdquo; để tải.</p>
+          </div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
+                  <th style={{ padding: '8px 12px', textAlign: 'left', color: 'var(--text-muted)', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 }}>Lý do</th>
+                  <th style={{ padding: '8px 12px', textAlign: 'center', color: 'var(--text-muted)', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 }}>Từ</th>
+                  <th style={{ padding: '8px 12px', textAlign: 'center', color: 'var(--text-muted)', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 }}>Đến</th>
+                  <th style={{ padding: '8px 12px', textAlign: 'center', color: 'var(--text-muted)', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 }}>Số ngày</th>
+                </tr>
+              </thead>
+              <tbody>
+                {holidays.map((h) => {
+                  const today = new Date().toISOString().slice(0, 10);
+                  const isActive = today >= h.date_from && today <= h.date_to;
+                  const isPast = h.date_to < today;
+                  const dayCount = Math.round((new Date(h.date_to).getTime() - new Date(h.date_from).getTime()) / 86400000) + 1;
+                  return (
+                    <tr
+                      key={h.id}
+                      style={{
+                        borderBottom: '1px solid var(--border-color)',
+                        background: isActive ? 'rgba(245,158,11,0.07)' : 'transparent',
+                        opacity: isPast ? 0.5 : 1,
+                      }}
+                    >
+                      <td style={{ padding: '10px 12px', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                        {isActive && <span style={{ fontSize: 10, background: 'var(--accent-amber)', color: '#000', borderRadius: 4, padding: '1px 5px', fontWeight: 700 }}>Hôm nay</span>}
+                        {h.name}
+                      </td>
+                      <td style={{ padding: '10px 12px', textAlign: 'center', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+                        {h.date_from.split('-').reverse().join('/')}
+                      </td>
+                      <td style={{ padding: '10px 12px', textAlign: 'center', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+                        {h.date_to.split('-').reverse().join('/')}
+                      </td>
+                      <td style={{ padding: '10px 12px', textAlign: 'center' }}>
+                        <span style={{
+                          display: 'inline-block', padding: '2px 8px', borderRadius: 6, fontSize: 12, fontWeight: 600,
+                          background: isActive ? 'var(--accent-amber-glow, rgba(245,158,11,0.1))' : 'var(--bg-card)',
+                          color: isActive ? 'var(--accent-amber)' : 'var(--text-secondary)',
+                        }}>
+                          {dayCount} ngày
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {/* Actions + Connection Grid */}

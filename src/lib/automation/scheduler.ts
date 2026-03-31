@@ -3,9 +3,10 @@
  * Called by Vercel Cron or API trigger to perform check-in/check-out.
  */
 import { v4 as uuidv4 } from 'uuid';
+import { Redis } from '@upstash/redis';
 import { getConfig } from '../config';
 import { addLog, type ExecutionLog } from '../storage';
-import { OdooClient } from './odoo-client';
+import { OdooClient, type PublicHoliday } from './odoo-client';
 import { sendNotification } from '../email';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
@@ -13,6 +14,81 @@ import timezone from 'dayjs/plugin/timezone';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
+
+// ---------------------------------------------------------------------------
+// Public Holiday helpers
+// ---------------------------------------------------------------------------
+
+const HOLIDAYS_CACHE_KEY = 'auto_checkin:public_holidays';
+// Cache 24 hours – holidays rarely change day-to-day
+const HOLIDAYS_CACHE_TTL = 24 * 60 * 60;
+
+let _redis: Redis | null = null;
+function getRedis(): Redis {
+  if (!_redis) {
+    const url  = process.env.UPSTASH_REDIS_REST_URL;
+    const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+    if (!url || !token) throw new Error('Missing Upstash Redis env vars');
+    _redis = new Redis({ url, token });
+  }
+  return _redis;
+}
+
+/**
+ * Fetch public holidays from Odoo, using Redis as a 24-hour cache.
+ * On any error (network, auth, Redis), returns an empty array so
+ * automation keeps running normally rather than blocking forever.
+ */
+export async function getPublicHolidaysWithCache(): Promise<PublicHoliday[]> {
+  try {
+    const redis = getRedis();
+    const cached = await redis.get<PublicHoliday[]>(HOLIDAYS_CACHE_KEY);
+    if (cached && cached.length > 0) return cached;
+  } catch {
+    // Redis unavailable — fall through to Odoo
+  }
+
+  try {
+    const config = await getConfig();
+    if (!config.odooUrl || !config.odooUsername || !config.odooPassword) return [];
+
+    const client = new OdooClient(config.odooUrl);
+    await client.authenticate(config.odooDatabase, config.odooUsername, config.odooPassword);
+    const holidays = await client.getPublicHolidays();
+
+    // Persist to cache (best-effort)
+    try {
+      const redis = getRedis();
+      await redis.set(HOLIDAYS_CACHE_KEY, holidays, { ex: HOLIDAYS_CACHE_TTL });
+    } catch { /* ignore cache write failure */ }
+
+    return holidays;
+  } catch (err) {
+    console.error('[scheduler] getPublicHolidaysWithCache error:', err);
+    return [];
+  }
+}
+
+/**
+ * Check if a given YYYY-MM-DD date is a public holiday.
+ */
+export async function isPublicHoliday(dateStr?: string): Promise<{ isHoliday: boolean; holidayName?: string }> {
+  const config = await getConfig();
+  const today = dateStr ?? dayjs().tz(config.timezone).format('YYYY-MM-DD');
+  const holidays = await getPublicHolidaysWithCache();
+  const match = holidays.find((h) => today >= h.date_from && today <= h.date_to);
+  return { isHoliday: !!match, holidayName: match?.name };
+}
+
+/**
+ * Invalidate the cached holiday list (e.g. after user forces a refresh).
+ */
+export async function invalidateHolidaysCache(): Promise<void> {
+  try {
+    const redis = getRedis();
+    await redis.del(HOLIDAYS_CACHE_KEY);
+  } catch { /* ignore */ }
+}
 
 export type ActionType = 'checkin' | 'checkout';
 
@@ -132,6 +208,18 @@ export async function executeAction(action: ActionType): Promise<ExecutionLog> {
   // Guard: not a working day
   if (!(await isWorkingDay())) {
     const log = makeLog(logId, action, 'skipped', 'Hôm nay không phải ngày làm việc.', startTime);
+    await addLog(log);
+    return log;
+  }
+
+  // Guard: public holiday
+  const { isHoliday, holidayName } = await isPublicHoliday();
+  if (isHoliday) {
+    const log = makeLog(
+      logId, action, 'skipped',
+      `🎌 Hôm nay là ngày lễ: "${holidayName}". Bỏ qua check-in/out.`,
+      startTime
+    );
     await addLog(log);
     return log;
   }
