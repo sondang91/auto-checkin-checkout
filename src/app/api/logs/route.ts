@@ -8,16 +8,18 @@ export async function GET(request: NextRequest) {
   const statsOnly = searchParams.get('stats') === 'true';
 
   if (statsOnly) {
-    return NextResponse.json(getLogStats());
+    return NextResponse.json(await getLogStats());
   }
 
-  const logs = getLogs(limit, offset);
-  const stats = getLogStats();
+  const [logs, stats] = await Promise.all([
+    getLogs(limit, offset),
+    getLogStats(),
+  ]);
 
   return NextResponse.json({ logs, stats });
 }
 
 export async function DELETE() {
-  clearLogs();
+  await clearLogs();
   return NextResponse.json({ success: true, message: 'Logs cleared' });
 }

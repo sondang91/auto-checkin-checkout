@@ -1,5 +1,4 @@
-import fs from 'fs';
-import path from 'path';
+import { Redis } from '@upstash/redis';
 
 export interface ExecutionLog {
   id: string;
@@ -12,82 +11,86 @@ export interface ExecutionLog {
   randomDelayApplied: number;
 }
 
-// Use /tmp on Vercel (serverless), data/ locally
-const isVercel = process.env.VERCEL === '1' || process.env.VERCEL_ENV !== undefined;
-const DATA_DIR = isVercel ? '/tmp' : path.join(process.cwd(), 'data');
-const LOGS_FILE = path.join(DATA_DIR, 'logs.json');
+const LOGS_KEY = 'auto_checkin:logs';
 const MAX_LOGS = 500;
+// 90 ngày TTL – tự xoá nếu không dùng lâu
+const TTL_SECONDS = 90 * 24 * 60 * 60;
 
-function ensureDataDir() {
-  try {
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
+// ---------------------------------------------------------------------------
+// Redis client (lazy singleton để tránh lỗi khi biến môi trường chưa có)
+// ---------------------------------------------------------------------------
+let _redis: Redis | null = null;
+
+function getRedis(): Redis {
+  if (!_redis) {
+    const url = process.env.UPSTASH_REDIS_REST_URL;
+    const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+
+    if (!url || !token) {
+      throw new Error(
+        'Thiếu biến môi trường UPSTASH_REDIS_REST_URL hoặc UPSTASH_REDIS_REST_TOKEN.\n' +
+        'Xem hướng dẫn: https://console.upstash.com → tạo database → copy REST URL & Token.'
+      );
     }
-  } catch {
-    // ignore on serverless
+
+    _redis = new Redis({ url, token });
   }
+  return _redis;
 }
 
-export function getLogs(limit = 50, offset = 0): ExecutionLog[] {
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+export async function getLogs(limit = 50, offset = 0): Promise<ExecutionLog[]> {
   try {
-    ensureDataDir();
-    if (!fs.existsSync(LOGS_FILE)) return [];
-    const data = JSON.parse(fs.readFileSync(LOGS_FILE, 'utf-8')) as ExecutionLog[];
-    const sorted = [...data].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-    return sorted.slice(offset, offset + limit);
-  } catch {
+    const redis = getRedis();
+    // LRANGE trả về mảng đã đúng thứ tự (mới nhất trước – do unshift khi thêm)
+    const raw = await redis.lrange<ExecutionLog>(LOGS_KEY, offset, offset + limit - 1);
+    return raw ?? [];
+  } catch (err) {
+    console.error('[storage] getLogs error:', err);
     return [];
   }
 }
 
-export function addLog(log: ExecutionLog): void {
+export async function addLog(log: ExecutionLog): Promise<void> {
   try {
-    ensureDataDir();
-    let logs: ExecutionLog[] = [];
-
-    if (fs.existsSync(LOGS_FILE)) {
-      try {
-        logs = JSON.parse(fs.readFileSync(LOGS_FILE, 'utf-8'));
-      } catch {
-        logs = [];
-      }
-    }
-
-    logs.unshift(log);
-
-    if (logs.length > MAX_LOGS) {
-      logs = logs.slice(0, MAX_LOGS);
-    }
-
-    fs.writeFileSync(LOGS_FILE, JSON.stringify(logs, null, 2));
-  } catch {
-    // Silently fail on serverless if /tmp is not writable
-    console.error('Failed to write log:', log.message);
+    const redis = getRedis();
+    // Thêm vào đầu danh sách (mới nhất trước)
+    await redis.lpush(LOGS_KEY, log);
+    // Giữ tối đa MAX_LOGS entries
+    await redis.ltrim(LOGS_KEY, 0, MAX_LOGS - 1);
+    // Refresh TTL mỗi lần ghi
+    await redis.expire(LOGS_KEY, TTL_SECONDS);
+  } catch (err) {
+    console.error('[storage] addLog error:', err);
   }
 }
 
-export function clearLogs(): void {
+export async function clearLogs(): Promise<void> {
   try {
-    ensureDataDir();
-    fs.writeFileSync(LOGS_FILE, JSON.stringify([]));
-  } catch {
-    // ignore
+    const redis = getRedis();
+    await redis.del(LOGS_KEY);
+  } catch (err) {
+    console.error('[storage] clearLogs error:', err);
   }
 }
 
-export function getLogStats() {
-  const logs = getLogs(MAX_LOGS);
+export async function getLogStats() {
+  const logs = await getLogs(MAX_LOGS, 0);
   const today = new Date().toISOString().split('T')[0];
-  const todayLogs = logs.filter(l => l.timestamp.startsWith(today));
+  const todayLogs = logs.filter((l) => l.timestamp.startsWith(today));
 
   return {
     total: logs.length,
     todayCount: todayLogs.length,
-    lastCheckin: logs.find(l => l.action === 'checkin'),
-    lastCheckout: logs.find(l => l.action === 'checkout'),
-    successRate: logs.length > 0
-      ? Math.round((logs.filter(l => l.status === 'success').length / logs.length) * 100)
-      : 0,
-    recentErrors: logs.filter(l => l.status === 'failed').slice(0, 5),
+    lastCheckin: logs.find((l) => l.action === 'checkin'),
+    lastCheckout: logs.find((l) => l.action === 'checkout'),
+    successRate:
+      logs.length > 0
+        ? Math.round((logs.filter((l) => l.status === 'success').length / logs.length) * 100)
+        : 0,
+    recentErrors: logs.filter((l) => l.status === 'failed').slice(0, 5),
   };
 }

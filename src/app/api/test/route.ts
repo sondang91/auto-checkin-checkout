@@ -11,7 +11,7 @@ export async function POST(request: NextRequest) {
 
   if (body.type === 'email') {
     const result = await testEmail();
-    addLog({
+    await addLog({
       id: uuidv4(),
       timestamp: new Date().toISOString(),
       action: 'test_email',
@@ -25,14 +25,14 @@ export async function POST(request: NextRequest) {
 
   // Default: test Odoo connection
   try {
-    const config = getConfig();
+    const config = await getConfig();
     const client = new OdooClient(config.odooUrl);
     const result = await client.testConnection(
       config.odooDatabase,
       config.odooUsername,
       config.odooPassword
     );
-    addLog({
+    await addLog({
       id: uuidv4(),
       timestamp: new Date().toISOString(),
       action: 'test_odoo',
@@ -44,7 +44,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Connection test failed';
-    addLog({
+    await addLog({
       id: uuidv4(),
       timestamp: new Date().toISOString(),
       action: 'test_odoo',
