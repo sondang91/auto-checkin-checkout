@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { executeAction } from '@/lib/automation/scheduler';
+import { executeAction, executeReport } from '@/lib/automation/scheduler';
 
 export async function GET(request: NextRequest) {
   const authHeader = request.headers.get('authorization');
@@ -9,6 +9,18 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const log = await executeAction('checkout');
-  return NextResponse.json({ success: log.status === 'success', log });
+  const checkoutLog = await executeAction('checkout');
+
+  // After a successful checkout, automatically submit the daily report
+  let reportLog = null;
+  if (checkoutLog.status === 'success') {
+    reportLog = await executeReport();
+  }
+
+  return NextResponse.json({
+    success: checkoutLog.status === 'success',
+    checkout: checkoutLog,
+    report: reportLog,
+  });
 }
+

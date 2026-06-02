@@ -83,18 +83,30 @@ export default function Dashboard() {
   const [newLeaveReason, setNewLeaveReason] = useState('Nghỉ phép');
   const [leaveLoading, setLeaveLoading] = useState(false);
 
+  // Daily Report state
+  const [reportStatus, setReportStatus] = useState<{
+    sheetContent: string | null;
+    sheetError: string | null;
+    alreadySentToday: boolean;
+    reportConfigured: boolean;
+    todayLabel: string;
+  } | null>(null);
+  const [reportLoading, setReportLoading] = useState(false);
+
   const fetchData = useCallback(async () => {
     try {
-      const [logsRes, configRes, holidaysRes, leavesRes] = await Promise.all([
+      const [logsRes, configRes, holidaysRes, leavesRes, reportRes] = await Promise.all([
         fetch('/api/logs'),
         fetch('/api/config'),
         fetch('/api/holidays'),
         fetch('/api/leaves'),
+        fetch('/api/report'),
       ]);
       const logsData = await logsRes.json();
       const configData = await configRes.json();
       const holidaysData = await holidaysRes.json();
       const leavesData = await leavesRes.json();
+      const reportData = await reportRes.json();
 
       setLogs(logsData.logs || []);
       setStats(logsData.stats || null);
@@ -113,6 +125,15 @@ export default function Dashboard() {
         const todayLeave = leaveList.find((l) => l.date === todayISO);
         setIsLeaveToday(!!todayLeave);
         setTodayLeaveReason(todayLeave?.reason ?? null);
+      }
+      if (reportData.success) {
+        setReportStatus({
+          sheetContent: reportData.sheetContent ?? null,
+          sheetError: reportData.sheetError ?? null,
+          alreadySentToday: !!reportData.alreadySentToday,
+          reportConfigured: !!reportData.reportConfigured,
+          todayLabel: reportData.todayLabel ?? '',
+        });
       }
     } catch (err) {
       console.error('Failed to fetch data:', err);
@@ -192,7 +213,7 @@ export default function Dashboard() {
     }
   };
 
-  const testConnection = async (type: 'odoo' | 'email') => {
+  const testConnection = async (type: 'odoo' | 'email' | 'sheets') => {
     setActionLoading(`test-${type}`);
     setTestResult(null);
     try {
@@ -215,6 +236,24 @@ export default function Dashboard() {
     if (!confirm('Xóa tất cả lịch sử?')) return;
     await fetch('/api/logs', { method: 'DELETE' });
     fetchData();
+  };
+
+  const triggerReport = async () => {
+    setReportLoading(true);
+    setTestResult(null);
+    try {
+      const res = await fetch('/api/report', { method: 'POST' });
+      const data = await res.json();
+      setTestResult({
+        success: data.success,
+        message: data.log?.message || data.error || 'Unknown result',
+      });
+      fetchData();
+    } catch {
+      setTestResult({ success: false, message: 'Lỗi kết nối server' });
+    } finally {
+      setReportLoading(false);
+    }
   };
 
   const refreshHolidays = async () => {
@@ -795,6 +834,82 @@ export default function Dashboard() {
           </div>
         )}
       </div>
+      {/* Daily Report Card */}
+      <div className="card animate-fade-in" style={{ marginBottom: 24 }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 16, gap: 12 }}>
+          <div>
+            <h2 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>📝 Báo cáo Ngày</h2>
+            <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '4px 0 0' }}>
+              Tự động tạo task Odoo sau checkout — nội dung lấy từ Google Sheet
+            </p>
+          </div>
+          {reportStatus && (
+            <span style={{
+              fontSize: 11, fontWeight: 700, borderRadius: 6, padding: '4px 10px', whiteSpace: 'nowrap',
+              background: reportStatus.alreadySentToday ? 'var(--accent-emerald-glow)' : 'rgba(100,116,139,0.15)',
+              color: reportStatus.alreadySentToday ? 'var(--accent-emerald)' : 'var(--text-muted)',
+            }}>
+              {reportStatus.alreadySentToday ? '✅ Đã gửi hôm nay' : '⏳ Chưa gửi'}
+            </span>
+          )}
+        </div>
+
+        {!reportStatus?.reportConfigured ? (
+          <div style={{
+            padding: '16px', borderRadius: 10, fontSize: 13,
+            background: 'rgba(245,158,11,0.07)', border: '1px solid rgba(245,158,11,0.2)',
+            color: 'var(--accent-amber)',
+          }}>
+            ⚠️ Chưa cấu hình <code style={{ background: 'rgba(0,0,0,0.2)', padding: '1px 5px', borderRadius: 4 }}>REPORT_PROJECT_ID</code>.
+            Thêm vào environment variables để bật tính năng này.
+          </div>
+        ) : (
+          <>
+            {/* Sheet content preview */}
+            <div style={{
+              marginBottom: 16, padding: '14px', borderRadius: 10,
+              background: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.2)',
+            }}>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
+                📄 Nội dung Google Sheet — {reportStatus?.todayLabel || 'Hôm nay'}
+              </div>
+              {reportStatus?.sheetError ? (
+                <p style={{ margin: 0, fontSize: 13, color: 'var(--accent-red)' }}>❌ {reportStatus.sheetError}</p>
+              ) : reportStatus?.sheetContent ? (
+                <pre style={{
+                  margin: 0, fontSize: 12, color: 'var(--text-primary)',
+                  whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                  fontFamily: 'var(--font-mono)', lineHeight: 1.6,
+                }}>{reportStatus.sheetContent}</pre>
+              ) : (
+                <p style={{ margin: 0, fontSize: 13, color: 'var(--text-muted)' }}>
+                  Chưa có nội dung cho hôm nay trong Google Sheet.
+                </p>
+              )}
+            </div>
+
+            {/* Manual trigger */}
+            <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+              <button
+                className="btn btn-primary"
+                style={{ fontSize: 13, padding: '8px 20px', opacity: reportStatus?.alreadySentToday ? 0.5 : 1 }}
+                disabled={reportLoading || reportStatus?.alreadySentToday || !reportStatus?.sheetContent}
+                onClick={triggerReport}
+              >
+                {reportLoading ? '⏳ Đang gửi...' : '📤 Gửi báo cáo ngay'}
+              </button>
+              <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                {reportStatus?.alreadySentToday
+                  ? 'Đã gửi hôm nay — cron cũng sẽ tự gửi sau checkout'
+                  : reportStatus?.sheetContent
+                    ? 'Nhấn để gửi ngay hoặc đợi cron tự gửi sau checkout'
+                    : 'Cần có nội dung trong Google Sheet trước'
+                }
+              </span>
+            </div>
+          </>
+        )}
+      </div>
 
       {/* Actions + Connection Grid */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16, marginBottom: 24 }}>
@@ -858,6 +973,14 @@ export default function Dashboard() {
               onClick={() => testConnection('email')}
             >
               {actionLoading === 'test-email' ? '⏳...' : '📧 Test Email'}
+            </button>
+            <button
+              className="btn btn-outline"
+              style={{ flex: 1, fontSize: 13 }}
+              disabled={!!actionLoading}
+              onClick={() => testConnection('sheets')}
+            >
+              {actionLoading === 'test-sheets' ? '⏳...' : '📊 Test Sheets'}
             </button>
           </div>
         </div>
@@ -949,9 +1072,19 @@ export default function Dashboard() {
                     <td style={{ padding: '10px 12px', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
                       {formatTime(log.timestamp)}
                     </td>
-                    <td style={{ padding: '10px 12px' }}>
-                      <span className={`badge ${log.action === 'checkin' ? 'success' : log.action === 'checkout' ? 'info' : 'info'}`}>
-                        {log.action === 'checkin' ? '🟢 Check-in' : log.action === 'checkout' ? '🔵 Check-out' : log.action === 'test_odoo' ? '🔗 Test Odoo' : log.action === 'test_email' ? '📧 Test Email' : '⚙️ Config'}
+                  <td style={{ padding: '10px 12px' }}>
+                      <span className={`badge ${
+                        log.action === 'checkin' ? 'success'
+                        : log.action === 'checkout' ? 'info'
+                        : log.action === 'report' ? 'info'
+                        : 'info'
+                      }`}>
+                        {log.action === 'checkin' ? '🟢 Check-in'
+                          : log.action === 'checkout' ? '🔵 Check-out'
+                          : log.action === 'report' ? '📝 Báo cáo'
+                          : log.action === 'test_odoo' ? '🔗 Test Odoo'
+                          : log.action === 'test_email' ? '📧 Test Email'
+                          : '⚙️ Config'}
                       </span>
                     </td>
                     <td style={{ padding: '10px 12px' }}>

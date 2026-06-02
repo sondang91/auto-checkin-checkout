@@ -30,6 +30,22 @@ export interface PublicHoliday {
   date_to: string;   // ISO date string 'YYYY-MM-DD'
 }
 
+export interface CreateTaskParams {
+  name: string;         // Task title, e.g. "Daily report - 02/06/2026"
+  projectId: number;    // Odoo project.project id
+  description: string;  // x_description_export field
+  deadline: string;     // YYYY-MM-DD
+  plannedHours: number; // planned_hours field
+  companyId: number;    // company_id
+  tagId?: number;       // optional tag id (0 = no tag)
+}
+
+export interface CreateTaskResult {
+  success: boolean;
+  taskId?: number;
+  message: string;
+}
+
 export class OdooClient {
   private readonly baseUrl: string;
   private sessionId: string | null = null;
@@ -145,6 +161,10 @@ export class OdooClient {
       }
     }
 
+    // Reset session before authenticating so getDatabases()'s anonymous
+    // session_id does not leak into the auth request headers.
+    this.sessionId = null;
+
     const result = await this.rpc('/web/session/authenticate', {
       db,
       login,
@@ -156,6 +176,13 @@ export class OdooClient {
     }
 
     this.uid = result.uid;
+
+    // Always override with the session_id from the authenticate response body.
+    // Set-Cookie extraction can be unreliable in serverless environments, so
+    // reading from the body is the most reliable approach.
+    if (result.session_id) {
+      this.sessionId = result.session_id;
+    }
 
     // Odoo cần một chút thời gian để commit session transaction trước khi nhận request tiếp theo
     // Bỏ qua delay này có thể gây lỗi "transaction is aborted" ở request kế tiếp
@@ -362,5 +389,83 @@ export class OdooClient {
    */
   isDatePublicHoliday(date: string, holidays: PublicHoliday[]): boolean {
     return holidays.some((h) => date >= h.date_from && date <= h.date_to);
+  }
+
+  /**
+   * Load session context from Odoo (companies, lang, tz).
+   * Browsers call this after every login — required before call_kw on some models.
+   */
+  private async warmUpSession(): Promise<void> {
+    try {
+      await this.rpc('/web/session/get_session_info', {});
+    } catch {
+      // Non-fatal — session may still work
+    }
+  }
+
+  /**
+   * Create a daily report task in Odoo (project.task model).
+   * Mirrors the curl payload for /web/dataset/call_kw/project.task/create.
+   */
+  async createDailyReport(params: CreateTaskParams): Promise<CreateTaskResult> {
+    if (!this.uid) throw new Error('Not authenticated');
+
+    // Warm up the session context before calling project.task/create.
+    // Without this, Odoo may return 'Session expired' because the web
+    // session hasn't been fully initialized with company/language context.
+    await this.warmUpSession();
+
+    // Build tag_ids using Odoo's many2many replace command [[6, false, [ids]]]
+    const tagIds = params.tagId && params.tagId > 0
+      ? [[6, false, [params.tagId]]]
+      : [[6, false, []]];
+
+    const result = await this.rpc('/web/dataset/call_kw/project.task/create', {
+      model:  'project.task',
+      method: 'create',
+      args: [{
+        name:                 params.name,
+        priority:             '0',
+        kanban_state:         'normal',
+        project_id:           params.projectId,
+        display_project_id:   false,
+        user_id:              this.uid,
+        active:               true,
+        date_deadline:        params.deadline,
+        tag_ids:              tagIds,
+        x_description_export: params.description,
+        planned_hours:        params.plannedHours,
+        company_id:           params.companyId,
+        // Fields required by Odoo to avoid defaults errors
+        parent_id:            false,
+        partner_id:           false,
+        recurrence_id:        false,
+        stage_id:             false,
+        recurring_task:       false,
+        description:          false,
+        timesheet_ids:        [],
+        child_ids:            [],
+        depend_on_ids:        [[6, false, []]],
+        state_field:          'cancelled',
+      }],
+      kwargs: {
+        context: {
+          lang:                         'vi_VN',
+          tz:                           'Asia/Saigon',
+          uid:                          this.uid,
+          allowed_company_ids:          [params.companyId],
+          // Mirror the browser context from the original curl
+          search_default_my_tasks:      0,
+          search_default_personal_stage: 0,
+          all_task:                     1,
+        },
+      },
+    }) as number;
+
+    return {
+      success: true,
+      taskId:  result,
+      message: `✅ Đã tạo báo cáo: Task #${result} — "${params.name}"`,
+    };
   }
 }

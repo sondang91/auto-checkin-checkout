@@ -100,6 +100,8 @@ export async function invalidateHolidaysCache(): Promise<void> {
   } catch { /* ignore */ }
 }
 
+import { getDailyReport, markReportSent } from '../google-sheets';
+
 export type ActionType = 'checkin' | 'checkout';
 
 /**
@@ -134,7 +136,7 @@ export async function shouldRunNow(action: ActionType): Promise<boolean> {
 
 function makeLog(
   logId: string,
-  action: ActionType,
+  action: ActionType | 'report',
   status: ExecutionLog['status'],
   message: string,
   startTime: number
@@ -262,4 +264,133 @@ export async function executeAction(action: ActionType): Promise<ExecutionLog> {
 
   return failLog;
 }
+
+// ---------------------------------------------------------------------------
+// Daily Report
+// ---------------------------------------------------------------------------
+
+/**
+ * Execute daily report: read description from Google Sheet → create Odoo task.
+ * Applies same skip-guards as check-in/out (holiday, leave day, not working day).
+ * Designed to be called right after a successful checkout.
+ */
+export async function executeReport(): Promise<ExecutionLog> {
+  const config = await getConfig();
+  const startTime = Date.now();
+  const logId = uuidv4();
+  const todayStr = dayjs().tz(config.timezone).format('YYYY-MM-DD');
+  const todayLabel = dayjs().tz(config.timezone).format('DD/MM/YYYY');
+
+  // Guard: report feature not configured
+  if (!config.reportProjectId) {
+    const log: ExecutionLog = {
+      ...makeLog(logId, 'report', 'skipped', '📝 REPORT_PROJECT_ID chưa được cấu hình. Bỏ qua tạo báo cáo.', startTime),
+    };
+    await addLog(log);
+    return log;
+  }
+
+  // Guard: missing Odoo credentials
+  if (!config.odooUrl || !config.odooUsername || !config.odooPassword) {
+    const log: ExecutionLog = {
+      ...makeLog(logId, 'report', 'failed', 'Missing Odoo credentials.', startTime),
+    };
+    await addLog(log);
+    return log;
+  }
+
+  // Guard: not a working day
+  if (!(await isWorkingDay())) {
+    const log: ExecutionLog = {
+      ...makeLog(logId, 'report', 'skipped', 'Hôm nay không phải ngày làm việc. Bỏ qua báo cáo.', startTime),
+    };
+    await addLog(log);
+    return log;
+  }
+
+  // Guard: public holiday
+  const { isHoliday, holidayName } = await isPublicHoliday();
+  if (isHoliday) {
+    const log: ExecutionLog = {
+      ...makeLog(logId, 'report', 'skipped', `🎌 Ngày lễ: "${holidayName}". Bỏ qua báo cáo.`, startTime),
+    };
+    await addLog(log);
+    return log;
+  }
+
+  // Guard: leave day
+  const { isLeave, reason: leaveReason } = await isLeaveDay(todayStr);
+  if (isLeave) {
+    const log: ExecutionLog = {
+      ...makeLog(logId, 'report', 'skipped', `🏢 Ngày nghỉ: "${leaveReason}". Bỏ qua báo cáo.`, startTime),
+    };
+    await addLog(log);
+    return log;
+  }
+
+  // Read today's report content from Google Sheet
+  let reportRow: Awaited<ReturnType<typeof getDailyReport>>;
+  try {
+    reportRow = await getDailyReport(todayStr);
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    const log: ExecutionLog = {
+      ...makeLog(logId, 'report', 'failed', `❌ Không thể đọc Google Sheet: ${errMsg}`, startTime),
+    };
+    await addLog(log);
+    return log;
+  }
+
+  if (!reportRow) {
+    const log: ExecutionLog = {
+      ...makeLog(logId, 'report', 'skipped', `📝 Không tìm thấy nội dung báo cáo cho ngày ${todayLabel} trong Google Sheet.`, startTime),
+    };
+    await addLog(log);
+    return log;
+  }
+
+  // Create Odoo task
+  try {
+    const client = new OdooClient(config.odooUrl);
+    await client.authenticate(config.odooDatabase, config.odooUsername, config.odooPassword);
+
+    const taskName = `${config.reportTaskName} - ${todayLabel}`;
+    const result = await client.createDailyReport({
+      name:         taskName,
+      projectId:    config.reportProjectId,
+      description:  reportRow.description,
+      deadline:     todayStr,
+      plannedHours: config.reportPlannedHours,
+      companyId:    config.reportCompanyId,
+      tagId:        config.reportTagId,
+    });
+
+    // Update Google Sheet status column (non-fatal)
+    if (result.taskId) {
+      await markReportSent(reportRow.rowIndex, result.taskId);
+    }
+
+    const log: ExecutionLog = {
+      ...makeLog(logId, 'report', 'success', result.message, startTime),
+      taskId: result.taskId,
+    };
+    await addLog(log);
+
+    await sendNotification('checkin', 'success', result.message, {
+      'Báo cáo': taskName,
+      'Task ID': `#${result.taskId}`,
+      'Thời gian': dayjs().tz(config.timezone).format('DD/MM/YYYY HH:mm:ss'),
+    }).catch(() => {});
+
+    return log;
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    const log: ExecutionLog = {
+      ...makeLog(logId, 'report', 'failed', `❌ Lỗi tạo task Odoo: ${errMsg}`, startTime),
+    };
+    await addLog(log);
+    return log;
+  }
+}
+
 
