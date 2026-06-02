@@ -26,8 +26,17 @@ async function getAccessToken(): Promise<string> {
     return _tokenCache.token;
   }
 
-  const email      = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-  const privateKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY?.replace(/\\n/g, '\n');
+  const email      = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.trim();
+  const rawKey     = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY ?? '';
+
+  // Normalize private key — Vercel may store the key in different formats:
+  // 1. Literal \n (two chars) — when pasted as single line with \n
+  // 2. Real newlines (\n) — when pasted as multiline in Vercel UI
+  // 3. Mixed — some platforms double-escape the key
+  const privateKey = rawKey
+    .replace(/\\n/g, '\n')      // literal \n → real newline
+    .replace(/\\\\n/g, '\n')    // double-escaped \\n → real newline
+    .trim();
 
   if (!email || !privateKey) {
     throw new Error(
