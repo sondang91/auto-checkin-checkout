@@ -3,12 +3,14 @@ import { Redis } from '@upstash/redis';
 export interface ExecutionLog {
   id: string;
   timestamp: string;
-  action: 'checkin' | 'checkout' | 'test_odoo' | 'test_email' | 'config_change';
+  action: 'checkin' | 'checkout' | 'report' | 'test_odoo' | 'test_email' | 'config_change';
   status: 'success' | 'failed' | 'skipped';
   message: string;
   screenshotPath?: string;
   executionTimeMs: number;
   randomDelayApplied: number;
+  /** For report action: the Odoo task ID created */
+  taskId?: number;
 }
 
 const LOGS_KEY = 'auto_checkin:logs';

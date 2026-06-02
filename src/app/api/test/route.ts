@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { getConfig } from '@/lib/config';
 import { OdooClient } from '@/lib/automation/odoo-client';
 import { testEmail } from '@/lib/email';
+import { testSheetsConnection } from '@/lib/google-sheets';
 import { addLog } from '@/lib/storage';
 
 export async function POST(request: NextRequest) {
@@ -20,6 +21,11 @@ export async function POST(request: NextRequest) {
       executionTimeMs: Date.now() - startTime,
       randomDelayApplied: 0,
     });
+    return NextResponse.json(result);
+  }
+
+  if (body.type === 'sheets') {
+    const result = await testSheetsConnection();
     return NextResponse.json(result);
   }
 

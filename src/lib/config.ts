@@ -24,6 +24,13 @@ export interface AppConfig {
   headless: boolean;
   maxRetries: number;
   retryDelayMs: number;
+
+  // Daily Report
+  reportProjectId: number;    // Odoo project ID to create tasks in
+  reportPlannedHours: number; // planned_hours for the task
+  reportCompanyId: number;    // company_id context
+  reportTagId: number;        // tag id (0 = no tag)
+  reportTaskName: string;     // task name prefix
 }
 
 /** Fields that can be edited from the dashboard */
@@ -50,6 +57,12 @@ const DEFAULT_CONFIG: AppConfig = {
   headless: true,
   maxRetries: 3,
   retryDelayMs: 5000,
+  // Daily Report
+  reportProjectId: 0,
+  reportPlannedHours: 8,
+  reportCompanyId: 1,
+  reportTagId: 0,
+  reportTaskName: 'Daily report',
 };
 
 const CONFIG_KEY = 'auto_checkin:config_overrides';
@@ -131,6 +144,12 @@ export async function getConfig(): Promise<AppConfig> {
     headless: process.env.HEADLESS !== 'false',
     maxRetries: Number(process.env.MAX_RETRIES) || DEFAULT_CONFIG.maxRetries,
     retryDelayMs: Number(process.env.RETRY_DELAY_MS) || DEFAULT_CONFIG.retryDelayMs,
+    // Daily Report
+    reportProjectId:    Number(process.env.REPORT_PROJECT_ID)    || DEFAULT_CONFIG.reportProjectId,
+    reportPlannedHours: Number(process.env.REPORT_PLANNED_HOURS) || DEFAULT_CONFIG.reportPlannedHours,
+    reportCompanyId:    Number(process.env.REPORT_COMPANY_ID)    || DEFAULT_CONFIG.reportCompanyId,
+    reportTagId:        Number(process.env.REPORT_TAG_ID)        || DEFAULT_CONFIG.reportTagId,
+    reportTaskName:     process.env.REPORT_TASK_NAME             || DEFAULT_CONFIG.reportTaskName,
   };
 }
 

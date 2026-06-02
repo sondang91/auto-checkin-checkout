@@ -40,7 +40,7 @@
 
 ```bash
 # 1. Cài dependencies
-npm install
+pnpm install
 
 # 2. Tạo file môi trường
 cp .env.example .env.local
@@ -48,7 +48,7 @@ cp .env.example .env.local
 # 3. Điền thông tin vào .env.local (xem bảng bên dưới)
 
 # 4. Chạy local
-npm run dev
+pnpm dev
 ```
 
 Truy cập **http://localhost:3000** để vào dashboard.
