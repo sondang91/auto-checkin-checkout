@@ -161,6 +161,10 @@ export class OdooClient {
       }
     }
 
+    // Reset session before authenticating so getDatabases()'s anonymous
+    // session_id does not leak into the auth request headers.
+    this.sessionId = null;
+
     const result = await this.rpc('/web/session/authenticate', {
       db,
       login,
@@ -172,6 +176,13 @@ export class OdooClient {
     }
 
     this.uid = result.uid;
+
+    // Always override with the session_id from the authenticate response body.
+    // Set-Cookie extraction can be unreliable in serverless environments, so
+    // reading from the body is the most reliable approach.
+    if (result.session_id) {
+      this.sessionId = result.session_id;
+    }
 
     // Odoo cần một chút thời gian để commit session transaction trước khi nhận request tiếp theo
     // Bỏ qua delay này có thể gây lỗi "transaction is aborted" ở request kế tiếp
@@ -381,11 +392,28 @@ export class OdooClient {
   }
 
   /**
+   * Load session context from Odoo (companies, lang, tz).
+   * Browsers call this after every login — required before call_kw on some models.
+   */
+  private async warmUpSession(): Promise<void> {
+    try {
+      await this.rpc('/web/session/get_session_info', {});
+    } catch {
+      // Non-fatal — session may still work
+    }
+  }
+
+  /**
    * Create a daily report task in Odoo (project.task model).
    * Mirrors the curl payload for /web/dataset/call_kw/project.task/create.
    */
   async createDailyReport(params: CreateTaskParams): Promise<CreateTaskResult> {
     if (!this.uid) throw new Error('Not authenticated');
+
+    // Warm up the session context before calling project.task/create.
+    // Without this, Odoo may return 'Session expired' because the web
+    // session hasn't been fully initialized with company/language context.
+    await this.warmUpSession();
 
     // Build tag_ids using Odoo's many2many replace command [[6, false, [ids]]]
     const tagIds = params.tagId && params.tagId > 0
@@ -422,10 +450,14 @@ export class OdooClient {
       }],
       kwargs: {
         context: {
-          lang:                'vi_VN',
-          tz:                  'Asia/Saigon',
-          uid:                 this.uid,
-          allowed_company_ids: [params.companyId],
+          lang:                         'vi_VN',
+          tz:                           'Asia/Saigon',
+          uid:                          this.uid,
+          allowed_company_ids:          [params.companyId],
+          // Mirror the browser context from the original curl
+          search_default_my_tasks:      0,
+          search_default_personal_stage: 0,
+          all_task:                     1,
         },
       },
     }) as number;
@@ -433,7 +465,7 @@ export class OdooClient {
     return {
       success: true,
       taskId:  result,
-      message: `✅ Đã tạo báo cáo: Task #${result} — “${params.name}”`,
+      message: `✅ Đã tạo báo cáo: Task #${result} — "${params.name}"`,
     };
   }
 }
