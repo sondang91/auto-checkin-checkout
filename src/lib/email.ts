@@ -47,7 +47,7 @@ export function getEmailConfig(): EmailConfig {
 }
 
 export async function sendNotification(
-  action: 'checkin' | 'checkout' | 'config_change',
+  action: 'checkin' | 'checkout' | 'report' | 'config_change',
   status: 'success' | 'failed',
   message: string,
   details?: Record<string, string>
@@ -75,8 +75,9 @@ export async function sendNotification(
 
     const isSuccess = status === 'success';
     const actionLabels: Record<string, string> = {
-      checkin: 'Check-in',
-      checkout: 'Check-out',
+      checkin:       'Check-in',
+      checkout:      'Check-out',
+      report:        'Daily Report',
       config_change: 'Thay đổi cấu hình',
     };
     const actionLabel = actionLabels[action] || action;

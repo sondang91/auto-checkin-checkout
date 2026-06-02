@@ -376,7 +376,7 @@ export async function executeReport(): Promise<ExecutionLog> {
     };
     await addLog(log);
 
-    await sendNotification('checkin', 'success', result.message, {
+    await sendNotification('report', 'success', result.message, {
       'Báo cáo': taskName,
       'Task ID': `#${result.taskId}`,
       'Thời gian': dayjs().tz(config.timezone).format('DD/MM/YYYY HH:mm:ss'),
