@@ -56,7 +56,10 @@ export async function POST(request: NextRequest) {
 export async function GET(request: NextRequest) {
   const url = new URL(request.url);
   const action = url.searchParams.get('action');
-  const secret = url.searchParams.get('secret') || request.headers.get('x-cron-secret');
+  const querySecret  = url.searchParams.get('secret');
+  const headerSecret = request.headers.get('x-cron-secret')
+                    || request.headers.get('authorization')?.replace('Bearer ', '');
+  const secret = querySecret || headerSecret;
 
   const cronSecret = process.env.CRON_SECRET;
   if (cronSecret && secret !== cronSecret) {

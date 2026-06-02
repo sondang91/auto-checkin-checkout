@@ -46,26 +46,23 @@
 ## 🔄 Flow tổng quát
 
 ```
-[cron-job.org 7:30]          [cron-job.org 17:30]
-       │                              │
-       ▼                              ▼
-/api/cron/checkin          /api/cron/checkout
-       │                              │
-  executeAction              executeAction('checkout')
-  ('checkin')                         │
-       │                     checkout thành công?
-       ▼                              │ Yes
-  ✅ Check-in                         ▼
-                              executeReport()
-                                      │
-                          getDailyReport(today) ← Google Sheet
-                                      │
-                          OdooClient.createDailyReport()
-                                      │
-                              ✅ Task Odoo #xxx
-                                      │
-                          markReportSent() → cập nhật Sheet
+[cron-job.org 8:30]    [cron-job.org 17:30]    [cron-job.org 17:30]
+       │                       │                        │
+       ▼                       ▼                        ▼
+/api/trigger               /api/trigger           /api/cron/report
+?action=checkin            ?action=checkout               │
+       │                       │                   executeReport()
+  executeAction          executeAction                    │
+  ('checkin')            ('checkout')         getDailyReport() ← Google Sheet
+       │                       │                          │
+  ✅ Check-in            ✅ Check-out           OdooClient.createDailyReport()
+                                                          │
+                                                  ✅ Task Odoo #xxx
+                                                          │
+                                              markReportSent() → cập nhật Sheet
 ```
+
+> 3 jobs chạy **song song, độc lập** nhau. Report không phụ thuộc checkout phải thành công.
 
 ---
 
@@ -303,16 +300,28 @@ REPORT_TAG_ID, REPORT_TASK_NAME
 
 ### Bước 3: Cấu hình cron-job.org
 
-Project này dùng [cron-job.org](https://cron-job.org) làm external cron (không dùng Vercel Cron):
+Project này dùng [cron-job.org](https://cron-job.org) làm external cron (không dùng Vercel Cron).
+Tạo **3 jobs** với cấu hình sau:
 
-| Job | URL | Lịch | Header |
-|-----|-----|------|--------|
-| Auto Check-in | `https://your-app.vercel.app/api/cron/checkin` | `30 8 * * 1-5` (8:30 T2-T6) | `Authorization: Bearer <CRON_SECRET>` |
-| Auto Check-out | `https://your-app.vercel.app/api/cron/checkout` | `30 17 * * 1-5` (17:30 T2-T6) | `Authorization: Bearer <CRON_SECRET>` |
+| # | Title | URL | Crontab | Timezone |
+|---|-------|-----|---------|----------|
+| 1 | Auto Check-in | `https://your-app.vercel.app/api/trigger?action=checkin` | `30 1 * * 1-5` | UTC |
+| 2 | Auto Check-out | `https://your-app.vercel.app/api/trigger?action=checkout` | `30 10 * * 1-5` | UTC |
+| 3 | Trigger Create Daily Report | `https://your-app.vercel.app/api/cron/report` | `30 10 * * 1-5` | UTC |
 
-> **Report không cần job riêng** — đã được chain tự động vào checkout. Sau khi checkout thành công, report sẽ tự chạy ngay.
->
-> Nếu muốn trigger report độc lập (không qua checkout), thêm job trỏ vào `/api/cron/report`.
+> **Lưu ý timezone**: cron-job.org mặc định UTC. `01:30 UTC = 08:30 VN`, `10:30 UTC = 17:30 VN`.
+
+#### Cấu hình Header xác thực (tab Advanced)
+
+Cả 3 jobs đều cần thêm header sau trong tab **Advanced → Headers**:
+
+| Key | Value |
+|-----|-------|
+| `Authorization` | `Bearer <CRON_SECRET>` |
+
+Thay `<CRON_SECRET>` bằng giá trị `CRON_SECRET` trong Vercel env của bạn.
+
+> ⚠️ **Bảo mật**: Dùng Authorization header thay vì `?secret=` trong URL để tránh secret bị lộ trong server logs.
 
 ---
 
